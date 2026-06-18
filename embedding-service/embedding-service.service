@@ -1,0 +1,21 @@
+[Unit]
+Description=Magento Vector Search - Embedding Service (multilingual-e5-base)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/html/app/code/Kkkonrad/VectorSearch/embedding-service
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+Environment=PORT=3000
+Environment=NODE_ENV=production
+# Allow enough RAM for the ONNX model (~500MB)
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=embedding-service
+
+[Install]
+WantedBy=multi-user.target

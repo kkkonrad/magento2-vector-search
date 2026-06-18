@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
+    <default>
+        <vectorsearch>
+            <embedding>
+                <service_url>http://localhost:3000</service_url>
+            </embedding>
+            <opensearch>
+                <host>localhost</host>
+                <port>9200</port>
+                <index_name>magento_products_vector</index_name>
+                <username></username>
+                <password></password>
+            </opensearch>
+        </vectorsearch>
+    </default>
+</config>

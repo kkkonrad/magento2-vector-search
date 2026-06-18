@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+
+    <!--
+        Each client needs its OWN Curl instance.
+        Magento's Curl is a singleton by default, but it accumulates state in
+        $_headers and $_curlUserOptions between calls (never reset in makeRequest()).
+        If EmbeddingClient and OpenSearch\Client share one Curl object, a previous
+        CURLOPT_CUSTOMREQUEST='DELETE'/'PUT' set via setOption() leaks into the next
+        POST request, causing the embedding service to receive DELETE instead of POST
+        and return an HTML error page instead of JSON embeddings.
+    -->
+    <virtualType name="Kkkonrad\VectorSearch\Model\EmbeddingCurl"
+                 type="Magento\Framework\HTTP\Client\Curl"/>
+
+    <virtualType name="Kkkonrad\VectorSearch\Model\OpenSearchCurl"
+                 type="Magento\Framework\HTTP\Client\Curl"/>
+
+    <type name="Kkkonrad\VectorSearch\Model\EmbeddingClient">
+        <arguments>
+            <argument name="curl" xsi:type="object">Kkkonrad\VectorSearch\Model\EmbeddingCurl</argument>
+        </arguments>
+    </type>
+
+    <type name="Kkkonrad\VectorSearch\Model\OpenSearch\Client">
+        <arguments>
+            <argument name="curl" xsi:type="object">Kkkonrad\VectorSearch\Model\OpenSearchCurl</argument>
+        </arguments>
+    </type>
+
+    <!-- Plugin on CatalogSearch collection to rerank results by vector similarity -->
+    <type name="Magento\CatalogSearch\Model\ResourceModel\Fulltext\Collection">
+        <plugin name="kkkonrad_vector_search_plugin"
+                type="Kkkonrad\VectorSearch\Plugin\SearchPlugin"
+                sortOrder="10"/>
+    </type>
+
+    <!-- Plugin on Search service to substitute search results with hybrid search results early -->
+    <type name="Magento\Search\Api\SearchInterface">
+        <plugin name="kkkonrad_vector_search_result_plugin"
+                type="Kkkonrad\VectorSearch\Plugin\SearchResultPlugin"
+                sortOrder="10"/>
+    </type>
+
+    <!-- Register CLI commands -->
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="vectorsearch_setup" xsi:type="object">
+                    Kkkonrad\VectorSearch\Console\Command\SetupCommand
+                </item>
+                <item name="vectorsearch_reindex" xsi:type="object">
+                    Kkkonrad\VectorSearch\Console\Command\ReindexCommand
+                </item>
+            </argument>
+        </arguments>
+    </type>
+
+</config>

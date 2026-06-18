@@ -1,0 +1,3 @@
+embedding-service/node_modules
+embedding-service/models
+*.log

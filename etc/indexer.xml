@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:Indexer/etc/indexer.xsd">
+    <indexer id="vector_search_products"
+             view_id="vector_search_products"
+             class="Kkkonrad\VectorSearch\Model\Indexer\ProductVector">
+        <title translate="true">Vector Search Product Indexer</title>
+        <description translate="true">Indexes product descriptions and vectors to OpenSearch kNN index.</description>
+    </indexer>
+</config>
