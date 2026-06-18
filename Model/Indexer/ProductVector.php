@@ -3,35 +3,48 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Model\Indexer;
 
-use Magento\Catalog\Api\Data\ProductInterface;
-use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory;
-use Magento\Catalog\Model\ResourceModel\Product\Attribute\CollectionFactory as AttributeCollectionFactory;
+use Magento\CatalogSearch\Model\Indexer\Fulltext\Action\DataProvider;
+use Magento\Elasticsearch\Model\Adapter\BatchDataMapper\ProductDataMapper;
 use Magento\Framework\Indexer\ActionInterface;
 use Magento\Framework\Mview\ActionInterface as MviewActionInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\EmbeddingClient;
 use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
+use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
 
+/**
+ * Vector search product indexer.
+ *
+ * Uses Magento's native DataProvider (the same pipeline as the standard ES indexer)
+ * to ensure embeddings are generated from identical data — including configurable
+ * variant names, option labels, store-specific values and child product attributes.
+ */
 class ProductVector implements ActionInterface, MviewActionInterface
 {
-    private const BATCH_SIZE = 50;
-
-    /** @var string[]|null */
-    private ?array $searchableAttributeCodes = null;
-
-    public function __construct(
-        private readonly CollectionFactory    $collectionFactory,
-        private readonly EmbeddingClient      $embeddingClient,
-        private readonly OpenSearchClient     $openSearchClient,
-        private readonly StoreManagerInterface $storeManager,
-        private readonly LoggerInterface      $logger,
-        private readonly AttributeCollectionFactory $attributeCollectionFactory
-    ) {}
+    /** Number of products fetched from the DB per SQL batch. */
+    private const BATCH_SIZE = 100;
 
     /**
-     * Full reindex — rebuilds the entire OpenSearch kNN index.
+     * Attribute backend types used to fetch dynamic (EAV) attributes.
+     * Mirrors the list in Magento\CatalogSearch\Model\Indexer\Fulltext\Action\Full::rebuildStoreIndex().
      */
+    private const DYNAMIC_FIELD_TYPES = ['int', 'varchar', 'text', 'decimal', 'datetime'];
+
+    public function __construct(
+        private readonly DataProvider            $dataProvider,
+        private readonly ProductDataMapper       $productDataMapper,
+        private readonly EmbeddingClient         $embeddingClient,
+        private readonly OpenSearchClient        $openSearchClient,
+        private readonly StoreManagerInterface   $storeManager,
+        private readonly LoggerInterface         $logger,
+        private readonly AttributeWeightProvider $weightProvider
+    ) {}
+
+    // -------------------------------------------------------------------------
+    // ActionInterface / MviewActionInterface
+    // -------------------------------------------------------------------------
+
     public function executeFull(): void
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
@@ -46,9 +59,6 @@ class ProductVector implements ActionInterface, MviewActionInterface
         $this->logger->info('[VectorSearch] Full reindex complete.');
     }
 
-    /**
-     * Partial reindex — called by Magento indexer for specific IDs.
-     */
     public function executeList(array $ids): void
     {
         foreach ($this->storeManager->getStores() as $store) {
@@ -56,9 +66,6 @@ class ProductVector implements ActionInterface, MviewActionInterface
         }
     }
 
-    /**
-     * Mview incremental update.
-     */
     public function execute($ids): void
     {
         $this->executeList(is_array($ids) ? $ids : [$ids]);
@@ -70,81 +77,117 @@ class ProductVector implements ActionInterface, MviewActionInterface
     }
 
     // -------------------------------------------------------------------------
+    // Core indexing logic — mirrors Full::rebuildStoreIndex()
+    // -------------------------------------------------------------------------
 
-    private function indexStore(int $storeId, array $ids = []): void
+    private function indexStore(int $storeId, array $productIds = []): void
     {
-        $collection = $this->collectionFactory->create();
-        $collection->setStoreId($storeId);
-
-        $searchableCodes = $this->getSearchableAttributeCodes();
-        $selectFields = array_merge(
-            ['name', 'description', 'short_description', 'sku', 'status', 'visibility'],
-            $searchableCodes
-        );
-        $collection->addAttributeToSelect(array_unique($selectFields));
-
-        $collection->addAttributeToFilter('status', ['eq' => \Magento\Catalog\Model\Product\Attribute\Source\Status::STATUS_ENABLED]);
-        $collection->addAttributeToFilter('visibility', ['in' => [
-            \Magento\Catalog\Model\Product\Visibility::VISIBILITY_IN_SEARCH,
-            \Magento\Catalog\Model\Product\Visibility::VISIBILITY_BOTH,
-        ]]);
-
-        if (!empty($ids)) {
-            $collection->addFieldToFilter('entity_id', ['in' => $ids]);
+        // Build the list of static (flat-table) attribute codes.
+        $staticFields = [];
+        foreach ($this->dataProvider->getSearchableAttributes('static') as $attribute) {
+            $staticFields[] = $attribute->getAttributeCode();
         }
 
-        $collection->setPageSize(self::BATCH_SIZE);
-        $pages = $collection->getLastPageNumber();
+        // Build the lists of dynamic (EAV) attribute IDs, grouped by backend type.
+        $dynamicFields = [];
+        foreach (self::DYNAMIC_FIELD_TYPES as $type) {
+            $dynamicFields[$type] = array_keys($this->dataProvider->getSearchableAttributes($type));
+        }
 
-        $processedIds = [];
+        $lastProductId  = 0;
+        $requestedIds   = !empty($productIds) ? array_map('intval', $productIds) : null;
+        $processedIds   = [];
 
-        for ($page = 1; $page <= $pages; $page++) {
-            $collection->setCurPage($page);
-            $collection->clear();
+        $products = $this->dataProvider->getSearchableProducts(
+            $storeId, $staticFields, $requestedIds, $lastProductId, self::BATCH_SIZE
+        );
+
+        while (count($products) > 0) {
+            // Collect parent + child IDs for this batch.
+            $batchParentIds = array_column($products, 'entity_id');
+            $childrenMap    = $this->buildChildrenMap($products);
+            $allIds         = array_unique(array_merge($batchParentIds, array_values(array_merge(...array_values($childrenMap) ?: [[]]))));
+
+            // Load all EAV attribute values in a single SQL query.
+            $productsAttributes = $this->dataProvider->getProductAttributes($storeId, $allIds, $dynamicFields);
 
             $batch = [];
-            /** @var ProductInterface $product */
-            foreach ($collection as $product) {
-                $batch[] = $product;
-                $processedIds[] = (int)$product->getId();
+            foreach ($products as $productData) {
+                $parentId      = (int)$productData['entity_id'];
+                $lastProductId = $parentId;
+
+                // Build the productIndex: parent attributes + enabled children attributes.
+                $productIndex = [];
+                if (isset($productsAttributes[$parentId])) {
+                    $productIndex[$parentId] = $productsAttributes[$parentId];
+                }
+                if (isset($childrenMap[$parentId])) {
+                    foreach ($childrenMap[$parentId] as $childId) {
+                        if (isset($productsAttributes[$childId])) {
+                            $productIndex[$childId] = $productsAttributes[$childId];
+                        }
+                    }
+                }
+
+                if (empty($productIndex)) {
+                    continue;
+                }
+
+                // prepareProductIndex() merges parent+children, resolves option labels,
+                // and returns the same index array that Magento passes to ES.
+                $index = $this->dataProvider->prepareProductIndex($productIndex, $productData, $storeId);
+
+                // ProductDataMapper::map() converts the raw index to a human-readable ES document
+                // with {code}_value fields (e.g. color_value: "Pomarańczowy").
+                $mapped = $this->productDataMapper->map([$parentId => $index], $storeId);
+                $doc    = $mapped[$parentId] ?? [];
+
+                $batch[] = [
+                    'entity_id'   => $parentId,
+                    'product_data' => $productData,
+                    'doc'          => $doc,
+                ];
+
+                $processedIds[] = $parentId;
             }
 
-            $this->processBatch($batch, $storeId);
+            if (!empty($batch)) {
+                $this->processBatch($batch, $storeId);
+            }
+
+            $products = $this->dataProvider->getSearchableProducts(
+                $storeId, $staticFields, $requestedIds, $lastProductId, self::BATCH_SIZE
+            );
         }
 
-        // Delete any IDs that were requested but not indexed (disabled, deleted, or not visible in search)
-        if (!empty($ids)) {
-            $skippedIds = array_diff(array_map('intval', $ids), $processedIds);
-            foreach ($skippedIds as $deleteId) {
+        // If a partial reindex was requested, delete any IDs that were not indexed
+        // (disabled, not visible in search, or deleted products).
+        if (!empty($productIds)) {
+            $skipped = array_diff(array_map('intval', $productIds), $processedIds);
+            foreach ($skipped as $deleteId) {
                 $this->openSearchClient->deleteProduct($deleteId);
-                $this->logger->info("[VectorSearch] Deleted product {$deleteId} from index (disabled or not visible in search).");
+                $this->logger->info("[VectorSearch] Deleted product {$deleteId} from index.");
             }
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Batch: embed + bulk index
+    // -------------------------------------------------------------------------
+
     /**
-     * @param ProductInterface[] $products
+     * @param array[] $batch  Each element: ['entity_id' => int, 'product_data' => array, 'doc' => array]
      */
-    private function processBatch(array $products, int $storeId): void
+    private function processBatch(array $batch, int $storeId): void
     {
-        if (empty($products)) {
+        if (empty($batch)) {
             return;
         }
 
-        $searchableCodes = $this->getSearchableAttributeCodes();
-
+        // Build embedding texts from the mapped ES documents.
         $texts = [];
-        $attributeTexts = [];
-        foreach ($products as $idx => $product) {
-            $name        = (string)$product->getName();
-            $description = strip_tags((string)($product->getData('description') ?: $product->getData('short_description') ?: ''));
-
-            // Extract values of all searchable/filterable attributes
-            $attrText = $this->getProductAttributesText($product, $searchableCodes);
-            $attributeTexts[$idx] = $attrText;
-
-            // combine name (repeated 2x for weight) + attributes + description
-            $texts[] = trim("{$name} {$name} {$attrText} {$description}");
+        foreach ($batch as $item) {
+            $texts[] = $this->buildEmbeddingText($item['doc'], $item['product_data']);
         }
 
         try {
@@ -154,119 +197,159 @@ class ProductVector implements ActionInterface, MviewActionInterface
             return;
         }
 
+        $weightedAttrCodes = array_keys($this->weightProvider->getWeightedAttributes());
+
         $docs = [];
-        foreach ($products as $i => $product) {
+        foreach ($batch as $i => $item) {
             if (!isset($embeddings[$i])) {
                 continue;
             }
-            $attrText = $attributeTexts[$i] ?? '';
-            $desc = strip_tags((string)$product->getData('description'));
-            $docs[] = [
-                'entity_id'   => (int)$product->getId(),
-                'sku'         => (string)$product->getSku(),
-                'store_id'    => $storeId,
-                'name'        => (string)$product->getName(),
-                'description' => trim($attrText . ' ' . $desc),
-                'status'      => (int)$product->getStatus(),
-                'visibility'  => (int)$product->getVisibility(),
-                'embedding'   => $embeddings[$i],
-            ];
+
+            $entityId    = $item['entity_id'];
+            $productData = $item['product_data'];
+            $doc         = $item['doc'];
+
+            // Build per-attribute OpenSearch fields from the *_value entries in the
+            // mapped document. These enable per-field boosting based on search_weight.
+            // Note: ProductDataMapper may return *_value as an array (multiple variant values).
+            $perAttrFields = [];
+            foreach ($weightedAttrCodes as $code) {
+                $valueKey = $code . '_value';
+                if (isset($doc[$valueKey])) {
+                    $str = $this->docFieldToString($doc[$valueKey]);
+                    if ($str !== '') {
+                        $perAttrFields[AttributeWeightProvider::fieldName($code)] = $str;
+                    }
+                }
+            }
+
+            $docs[] = array_merge(
+                [
+                    'entity_id'   => $entityId,
+                    'sku'         => (string)($productData['sku'] ?? ''),
+                    'store_id'    => $storeId,
+                    'name'        => $this->docFieldToString($doc['name'] ?? $productData['name'] ?? ''),
+                    'description' => $this->getDocumentDescription($doc),
+                    'status'      => (int)($productData['status'] ?? 1),
+                    'visibility'  => (int)($productData['visibility'] ?? 4),
+                    'embedding'   => $embeddings[$i],
+                ],
+                $perAttrFields
+            );
         }
 
         $this->openSearchClient->bulk($docs);
         $this->logger->info('[VectorSearch] Indexed ' . count($docs) . " products for store {$storeId}.");
     }
 
-    /**
-     * Get all searchable and filterable attributes configured in Magento.
-     *
-     * @return string[]
-     */
-    private function getSearchableAttributeCodes(): array
-    {
-        if ($this->searchableAttributeCodes === null) {
-            $collection = $this->attributeCollectionFactory->create();
-            $collection->addFieldToFilter(
-                ['is_searchable', 'is_filterable'],
-                [
-                    ['eq' => 1],
-                    ['gt' => 0]
-                ]
-            );
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
 
-            $codes = [];
-            foreach ($collection as $attribute) {
-                $code = $attribute->getAttributeCode();
-                if (in_array($code, ['status', 'visibility', 'tax_class_id', 'price', 'url_key', 'name', 'description', 'short_description', 'sku'])) {
-                    continue;
-                }
-                $codes[] = $code;
-            }
-            $this->searchableAttributeCodes = array_unique($codes);
+    /**
+     * Builds the text used to generate an embedding from the mapped ES document.
+     *
+     * Structure (mirrors what Magento indexes in the `_search` field):
+     *   - name (×2 for extra weight — includes configurable variant names)
+     *   - all {code}_value fields (human-readable attribute labels)
+     *   - short_description
+     *   - description (HTML stripped)
+     *
+     * @param array $doc         Mapped ES document (output of ProductDataMapper::map())
+     * @param array $productData Static product row (entity_id, name, sku, type_id, …)
+     */
+    private function buildEmbeddingText(array $doc, array $productData): string
+    {
+        $parts = [];
+
+        // Name (with configurable variants already merged in by ProductDataMapper).
+        $name = $this->docFieldToString($doc['name'] ?? $productData['name'] ?? '');
+        if ($name !== '') {
+            $parts[] = $name;
+            $parts[] = $name; // doubled for semantic weight
         }
-        return $this->searchableAttributeCodes;
+
+        // All human-readable attribute values (color_value, material_value, …).
+        foreach ($doc as $key => $value) {
+            if (str_ends_with($key, '_value')) {
+                $str = $this->docFieldToString($value);
+                if ($str !== '') {
+                    $parts[] = $str;
+                }
+            }
+        }
+
+        // Descriptions.
+        $short = strip_tags($this->docFieldToString($doc['short_description'] ?? ''));
+        if ($short !== '') {
+            $parts[] = $short;
+        }
+        $desc = strip_tags($this->docFieldToString($doc['description'] ?? ''));
+        if ($desc !== '') {
+            $parts[] = $desc;
+        }
+
+        return trim(implode(' ', array_filter($parts)));
     }
 
     /**
-     * Extracts all searchable/filterable attribute values from the product and its children.
-     *
-     * @param ProductInterface $product
-     * @param string[] $attributeCodes
-     * @return string
+     * Builds the plain-text description stored in the OpenSearch document
+     * (used for lexical fallback in hybrid search).
      */
-    private function getProductAttributesText(ProductInterface $product, array $attributeCodes): string
+    private function getDocumentDescription(array $doc): string
     {
-        $lines = [];
-        foreach ($attributeCodes as $code) {
-            $attribute = $product->getResource()->getAttribute($code);
-            if (!$attribute) {
-                continue;
-            }
-            $label = $attribute->getStoreLabel();
-            if (empty($label)) {
-                $label = $attribute->getFrontendLabel();
-            }
-            if (empty($label)) {
-                $label = ucfirst(str_replace('_', ' ', $code));
-            }
-
-            $values = [];
-            // Check parent
-            $val = $product->getAttributeText($code);
-            if (empty($val)) {
-                $val = $product->getData($code);
-            }
-            if ($val !== null && $val !== '') {
-                if (is_array($val)) {
-                    $values = $val;
-                } else {
-                    $values[] = (string)$val;
+        $parts = [];
+        foreach ($doc as $key => $value) {
+            if (str_ends_with($key, '_value')) {
+                $str = $this->docFieldToString($value);
+                if ($str !== '') {
+                    $parts[] = $str;
                 }
-            }
-
-            // Check children
-            if ($product->getTypeId() === 'configurable') {
-                $children = $product->getTypeInstance()->getUsedProducts($product);
-                foreach ($children as $child) {
-                    $val = $attribute->getSource()->getOptionText($child->getData($code));
-                    if (empty($val)) {
-                        $val = $child->getData($code);
-                    }
-                    if ($val !== null && $val !== '') {
-                        if (is_array($val)) {
-                            $values = array_merge($values, $val);
-                        } else {
-                            $values[] = (string)$val;
-                        }
-                    }
-                }
-            }
-
-            $values = array_unique(array_filter($values));
-            if (!empty($values)) {
-                $lines[] = "{$label}: " . implode(', ', $values) . '.';
             }
         }
-        return implode(' ', $lines);
+        $desc = strip_tags($this->docFieldToString($doc['description'] ?? ''));
+        if ($desc !== '') {
+            $parts[] = $desc;
+        }
+        return trim(implode(' ', array_filter($parts)));
+    }
+
+    /**
+     * Builds a map of parent_id → [child_id, …] for composite products in the batch.
+     *
+     * @param  array[] $products  Rows from DataProvider::getSearchableProducts()
+     * @return array<int, int[]>
+     */
+    private function buildChildrenMap(array $products): array
+    {
+        $map = [];
+        foreach ($products as $productData) {
+            $childIds = $this->dataProvider->getProductChildIds(
+                $productData['entity_id'],
+                $productData['type_id']
+            );
+            if (!empty($childIds)) {
+                $map[(int)$productData['entity_id']] = array_map('intval', $childIds);
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * Safely converts a document field value to a trimmed string.
+     *
+     * ProductDataMapper::map() returns arrays for fields that aggregate values
+     * from multiple configurable variants (e.g. 'name' contains one entry per
+     * variant). We join them with a space so the embedding sees all variant names.
+     *
+     * @param mixed $value
+     */
+    private function docFieldToString(mixed $value): string
+    {
+        if (is_array($value)) {
+            $parts = array_filter(array_map('strval', $value), static fn(string $s): bool => $s !== '');
+            return trim(implode(' ', $parts));
+        }
+        return trim((string)$value);
     }
 }
