@@ -12,6 +12,7 @@ use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\EmbeddingClient;
 use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
+use Magento\Framework\App\ResourceConnection;
 
 /**
  * Vector search product indexer.
@@ -31,6 +32,12 @@ class ProductVector implements ActionInterface, MviewActionInterface
      */
     private const DYNAMIC_FIELD_TYPES = ['int', 'varchar', 'text', 'decimal', 'datetime'];
 
+    /**
+     * Cache of category names and paths for the currently indexed store.
+     * @var array<int, array{name: string, path: string}>|null
+     */
+    private ?array $categoryMap = null;
+
     public function __construct(
         private readonly DataProvider            $dataProvider,
         private readonly ProductDataMapper       $productDataMapper,
@@ -38,7 +45,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         private readonly OpenSearchClient        $openSearchClient,
         private readonly StoreManagerInterface   $storeManager,
         private readonly LoggerInterface         $logger,
-        private readonly AttributeWeightProvider $weightProvider
+        private readonly AttributeWeightProvider $weightProvider,
+        private readonly ResourceConnection     $resource
     ) {}
 
     // -------------------------------------------------------------------------
@@ -82,6 +90,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
     private function indexStore(int $storeId, array $productIds = []): void
     {
+        $this->loadCategoryMap($storeId);
+
         // Build the list of static (flat-table) attribute codes.
         $staticFields = [];
         foreach ($this->dataProvider->getSearchableAttributes('static') as $attribute) {
@@ -187,7 +197,10 @@ class ProductVector implements ActionInterface, MviewActionInterface
         // Build embedding texts from the mapped ES documents.
         $texts = [];
         foreach ($batch as $item) {
-            $texts[] = $this->buildEmbeddingText($item['doc'], $item['product_data']);
+            $doc = $item['doc'];
+            $categoryIds = isset($doc['category_ids']) && is_array($doc['category_ids']) ? $doc['category_ids'] : [];
+            $categoryNames = $this->getProductCategoryNames($categoryIds);
+            $texts[] = $this->buildEmbeddingText($doc, $item['product_data'], $categoryNames);
         }
 
         try {
@@ -209,6 +222,9 @@ class ProductVector implements ActionInterface, MviewActionInterface
             $productData = $item['product_data'];
             $doc         = $item['doc'];
 
+            $categoryIds = isset($doc['category_ids']) && is_array($doc['category_ids']) ? $doc['category_ids'] : [];
+            $categoryNames = $this->getProductCategoryNames($categoryIds);
+
             // Build per-attribute OpenSearch fields from the *_value entries in the
             // mapped document. These enable per-field boosting based on search_weight.
             // Note: ProductDataMapper may return *_value as an array (multiple variant values).
@@ -229,7 +245,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
                     'sku'         => (string)($productData['sku'] ?? ''),
                     'store_id'    => $storeId,
                     'name'        => $this->docFieldToString($doc['name'] ?? $productData['name'] ?? ''),
-                    'description' => $this->getDocumentDescription($doc),
+                    'description' => $this->getDocumentDescription($doc, $categoryNames),
                     'status'      => (int)($productData['status'] ?? 1),
                     'visibility'  => (int)($productData['visibility'] ?? 4),
                     'embedding'   => $embeddings[$i],
@@ -255,10 +271,11 @@ class ProductVector implements ActionInterface, MviewActionInterface
      *   - short_description
      *   - description (HTML stripped)
      *
-     * @param array $doc         Mapped ES document (output of ProductDataMapper::map())
-     * @param array $productData Static product row (entity_id, name, sku, type_id, …)
+     * @param array    $doc           Mapped ES document (output of ProductDataMapper::map())
+     * @param array    $productData   Static product row (entity_id, name, sku, type_id, …)
+     * @param string[] $categoryNames Resolved category names
      */
-    private function buildEmbeddingText(array $doc, array $productData): string
+    private function buildEmbeddingText(array $doc, array $productData, array $categoryNames): string
     {
         $parts = [];
 
@@ -267,6 +284,11 @@ class ProductVector implements ActionInterface, MviewActionInterface
         if ($name !== '') {
             $parts[] = $name;
             $parts[] = $name; // doubled for semantic weight
+        }
+
+        // Category names (helps model distinguish gender/audience like Men vs Women).
+        if (!empty($categoryNames)) {
+            $parts[] = implode(' ', $categoryNames);
         }
 
         // All human-readable attribute values (color_value, material_value, …).
@@ -295,10 +317,18 @@ class ProductVector implements ActionInterface, MviewActionInterface
     /**
      * Builds the plain-text description stored in the OpenSearch document
      * (used for lexical fallback in hybrid search).
+     *
+     * @param array    $doc           Mapped ES document (output of ProductDataMapper::map())
+     * @param string[] $categoryNames Resolved category names
      */
-    private function getDocumentDescription(array $doc): string
+    private function getDocumentDescription(array $doc, array $categoryNames): string
     {
         $parts = [];
+
+        if (!empty($categoryNames)) {
+            $parts[] = implode(' ', $categoryNames);
+        }
+
         foreach ($doc as $key => $value) {
             if (str_ends_with($key, '_value')) {
                 $str = $this->docFieldToString($value);
@@ -351,5 +381,98 @@ class ProductVector implements ActionInterface, MviewActionInterface
             return trim(implode(' ', $parts));
         }
         return trim((string)$value);
+    }
+
+    /**
+     * Loads and caches category names and paths for the given store.
+     */
+    private function loadCategoryMap(int $storeId): void
+    {
+        try {
+            $conn = $this->resource->getConnection();
+            
+            // Get category name attribute ID (entity_type_id = 3 for catalog_category)
+            $selectAttr = $conn->select()
+                ->from($conn->getTableName('eav_attribute'), ['attribute_id'])
+                ->where('attribute_code = ?', 'name')
+                ->where('entity_type_id = ?', 3);
+            $attributeId = (int)$conn->fetchOne($selectAttr);
+
+            if (!$attributeId) {
+                $this->categoryMap = [];
+                return;
+            }
+
+            // Build the base select query
+            $select = $conn->select()
+                ->from(['cce' => $conn->getTableName('catalog_category_entity')], ['entity_id', 'path'])
+                ->join(
+                    ['ccv' => $conn->getTableName('catalog_category_entity_varchar')],
+                    'ccv.entity_id = cce.entity_id',
+                    ['name' => 'value']
+                )
+                ->where('ccv.attribute_id = ?', $attributeId);
+
+            // Fetch name for the specified storeId
+            $selectWithStore = clone $select;
+            $selectWithStore->where('ccv.store_id = ?', $storeId);
+            $rows = $conn->fetchAll($selectWithStore);
+
+            // Fallback to store 0 if no results found
+            if (empty($rows) && $storeId !== 0) {
+                $selectWithDefault = clone $select;
+                $selectWithDefault->where('ccv.store_id = ?', 0);
+                $rows = $conn->fetchAll($selectWithDefault);
+            }
+
+            $map = [];
+            foreach ($rows as $row) {
+                $map[(int)$row['entity_id']] = [
+                    'path' => (string)$row['path'],
+                    'name' => (string)$row['name']
+                ];
+            }
+            $this->categoryMap = $map;
+        } catch (\Throwable $e) {
+            $this->logger->error('[VectorSearch] Error loading category map: ' . $e->getMessage());
+            $this->categoryMap = [];
+        }
+    }
+
+    /**
+     * Resolves product category IDs to all ancestor and direct category names.
+     *
+     * @param int[] $categoryIds
+     * @return string[]
+     */
+    private function getProductCategoryNames(array $categoryIds): array
+    {
+        if ($this->categoryMap === null) {
+            return [];
+        }
+
+        $allIds = [];
+        foreach ($categoryIds as $catId) {
+            $catId = (int)$catId;
+            if (isset($this->categoryMap[$catId])) {
+                $path = $this->categoryMap[$catId]['path'];
+                foreach (explode('/', $path) as $part) {
+                    $partId = (int)$part;
+                    if ($partId > 2) { // Exclude root (1) and default category (2)
+                        $allIds[] = $partId;
+                    }
+                }
+            }
+        }
+
+        $allIds = array_unique($allIds);
+        $names = [];
+        foreach ($allIds as $id) {
+            if (isset($this->categoryMap[$id]) && $this->categoryMap[$id]['name'] !== '') {
+                $names[] = $this->categoryMap[$id]['name'];
+            }
+        }
+
+        return $names;
     }
 }

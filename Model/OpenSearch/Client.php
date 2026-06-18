@@ -241,8 +241,13 @@ class Client
 
         // Build boosted fields list from Magento attribute search_weight settings.
         // name gets an extra multiplier so it always dominates over attribute fields.
+        // description (which contains category names) and sku are added to ensure they are searched.
         $weightedAttrs = $this->weightProvider->getWeightedAttributes();
-        $fields        = ['name^' . self::NAME_EXTRA_BOOST];
+        $fields        = [
+            'name^' . self::NAME_EXTRA_BOOST,
+            'description^2',
+            'sku^5'
+        ];
         foreach ($weightedAttrs as $code => $weight) {
             $fields[] = AttributeWeightProvider::fieldName($code) . '^' . $weight;
         }
