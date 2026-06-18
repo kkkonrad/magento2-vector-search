@@ -157,7 +157,7 @@ class Client
                     'visibility'  => ['type' => 'integer'],
                     'embedding'   => [
                         'type'      => 'knn_vector',
-                        'dimension' => 384,
+                        'dimension' => 768,
                         'method'    => [
                             // lucene supports kNN filters natively (required for hybrid/RRF).
                             // nmslib does NOT support the 'filter' parameter and causes a 400

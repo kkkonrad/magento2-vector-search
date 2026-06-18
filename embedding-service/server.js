@@ -1,8 +1,8 @@
 import { pipeline } from '@xenova/transformers';
 import express from 'express';
 
-const PORT          = process.env.PORT           || 3000;
-const MODEL         = process.env.MODEL          || 'Xenova/multilingual-e5-small';
+const PORT = process.env.PORT || 3000;
+const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-base';
 const MAX_BATCH_SIZE = parseInt(process.env.MAX_BATCH_SIZE || '64', 10);
 
 const app = express();
@@ -27,12 +27,12 @@ let embedder = null;
 // one chunk (~500 ms), not an entire 50-text reindex batch.
 
 const queues = { high: [], normal: [] };
-let running  = false;
+let running = false;
 
 function enqueue(fn, priority = 'normal') {
     return new Promise((resolve, reject) => {
         queues[priority].push(async () => {
-            try   { resolve(await fn()); }
+            try { resolve(await fn()); }
             catch (err) { reject(err); }
         });
         kick();
@@ -44,7 +44,7 @@ async function kick() {
     const task = queues.high.shift() ?? queues.normal.shift();
     if (!task) return;
     running = true;
-    try   { await task(); }
+    try { await task(); }
     finally { running = false; kick(); }
 }
 
@@ -70,7 +70,7 @@ async function loadModel() {
  */
 async function embedBatch(texts) {
     const output = await embedder(texts, { pooling: 'mean', normalize: true });
-    const dim    = output.data.length / texts.length;
+    const dim = output.data.length / texts.length;
     const result = [];
     for (let i = 0; i < texts.length; i++) {
         result.push(Array.from(output.data.slice(i * dim, (i + 1) * dim)));
@@ -109,9 +109,9 @@ app.post('/embed', async (req, res) => {
     const headerPriority = req.headers['x-embed-priority'];
     const priority =
         (bodyPriority === 'high' || headerPriority === 'high') ? 'high'
-      : (bodyPriority === 'normal' || headerPriority === 'normal') ? 'normal'
-      : texts.length === 1 ? 'high'
-      : 'normal';
+            : (bodyPriority === 'normal' || headerPriority === 'normal') ? 'normal'
+                : texts.length === 1 ? 'high'
+                    : 'normal';
 
     try {
         // Split into chunks and enqueue each one separately.
@@ -129,8 +129,8 @@ app.post('/embed', async (req, res) => {
 
         return res.json({
             embeddings: allEmbeddings,
-            model:      MODEL,
-            count:      allEmbeddings.length,
+            model: MODEL,
+            count: allEmbeddings.length,
             priority,
         });
     } catch (err) {
@@ -142,11 +142,11 @@ app.post('/embed', async (req, res) => {
 /** GET /health */
 app.get('/health', (_req, res) => {
     res.json({
-        status:      embedder ? 'ok' : 'loading',
-        model:       MODEL,
-        batchSize:   MAX_BATCH_SIZE,
-        queued:      { high: queues.high.length, normal: queues.normal.length },
-        workerBusy:  running,
+        status: embedder ? 'ok' : 'loading',
+        model: MODEL,
+        batchSize: MAX_BATCH_SIZE,
+        queued: { high: queues.high.length, normal: queues.normal.length },
+        workerBusy: running,
     });
 });
 

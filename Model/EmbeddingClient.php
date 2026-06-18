@@ -11,7 +11,7 @@ class EmbeddingClient
     /**
      * Timeout for bulk reindex calls (many texts, slow is acceptable).
      */
-    private const TIMEOUT_REINDEX = 30;
+    private const TIMEOUT_REINDEX = 120;
 
     /**
      * Timeout for live search queries (1 text).
