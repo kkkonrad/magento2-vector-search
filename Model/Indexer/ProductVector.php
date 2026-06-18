@@ -5,25 +5,28 @@ namespace Kkkonrad\VectorSearch\Model\Indexer;
 
 use Magento\Catalog\Api\Data\ProductInterface;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory;
+use Magento\Catalog\Model\ResourceModel\Product\Attribute\CollectionFactory as AttributeCollectionFactory;
 use Magento\Framework\Indexer\ActionInterface;
 use Magento\Framework\Mview\ActionInterface as MviewActionInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\EmbeddingClient;
 use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
-use Kkkonrad\VectorSearch\Model\AttributeWeightsProvider;
 
 class ProductVector implements ActionInterface, MviewActionInterface
 {
     private const BATCH_SIZE = 50;
 
+    /** @var string[]|null */
+    private ?array $searchableAttributeCodes = null;
+
     public function __construct(
-        private readonly CollectionFactory         $collectionFactory,
-        private readonly EmbeddingClient           $embeddingClient,
-        private readonly OpenSearchClient          $openSearchClient,
-        private readonly StoreManagerInterface     $storeManager,
-        private readonly LoggerInterface           $logger,
-        private readonly AttributeWeightsProvider  $attributeWeightsProvider
+        private readonly CollectionFactory    $collectionFactory,
+        private readonly EmbeddingClient      $embeddingClient,
+        private readonly OpenSearchClient     $openSearchClient,
+        private readonly StoreManagerInterface $storeManager,
+        private readonly LoggerInterface      $logger,
+        private readonly AttributeCollectionFactory $attributeCollectionFactory
     ) {}
 
     /**
@@ -73,7 +76,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
         $collection = $this->collectionFactory->create();
         $collection->setStoreId($storeId);
 
-        $searchableCodes = $this->attributeWeightsProvider->getAttributeCodes();
+        $searchableCodes = $this->getSearchableAttributeCodes();
         $selectFields = array_merge(
             ['name', 'description', 'short_description', 'sku', 'status', 'visibility'],
             $searchableCodes
@@ -128,43 +131,20 @@ class ProductVector implements ActionInterface, MviewActionInterface
             return;
         }
 
-        $attributeCodes = $this->attributeWeightsProvider->getAttributeCodes();
-        $weights = $this->attributeWeightsProvider->getWeights();
+        $searchableCodes = $this->getSearchableAttributeCodes();
 
         $texts = [];
-        foreach ($products as $product) {
-            $parts = [];
-            foreach ($attributeCodes as $code) {
-                if ($code === 'sku') {
-                    $val = (string)$product->getSku();
-                } elseif ($code === 'name') {
-                    $val = (string)$product->getName();
-                } elseif ($code === 'description') {
-                    $val = strip_tags((string)$product->getData('description'));
-                } elseif ($code === 'short_description') {
-                    $val = strip_tags((string)$product->getData('short_description'));
-                } else {
-                    $val = $this->getAttributeValue($product, $code);
-                }
+        $attributeTexts = [];
+        foreach ($products as $idx => $product) {
+            $name        = (string)$product->getName();
+            $description = strip_tags((string)($product->getData('description') ?: $product->getData('short_description') ?: ''));
 
-                if ($val === null || $val === '') {
-                    continue;
-                }
+            // Extract values of all searchable/filterable attributes
+            $attrText = $this->getProductAttributesText($product, $searchableCodes);
+            $attributeTexts[$idx] = $attrText;
 
-                $weight = $weights[$code] ?? 1;
-                // Formulate the part for semantic search
-                if (in_array($code, ['name', 'description', 'short_description', 'sku'])) {
-                    $formattedPart = $val;
-                } else {
-                    $label = $this->getAttributeLabel($product, $code);
-                    $formattedPart = "{$label}: {$val}.";
-                }
-
-                for ($w = 0; $w < $weight; $w++) {
-                    $parts[] = $formattedPart;
-                }
-            }
-            $texts[] = trim(implode(' ', $parts));
+            // combine name (repeated 2x for weight) + attributes + description
+            $texts[] = trim("{$name} {$name} {$attrText} {$description}");
         }
 
         try {
@@ -179,29 +159,18 @@ class ProductVector implements ActionInterface, MviewActionInterface
             if (!isset($embeddings[$i])) {
                 continue;
             }
-
-            $doc = [
-                'entity_id'  => (int)$product->getId(),
-                'store_id'   => $storeId,
-                'status'     => (int)$product->getStatus(),
-                'visibility' => (int)$product->getVisibility(),
-                'embedding'  => $embeddings[$i],
+            $attrText = $attributeTexts[$i] ?? '';
+            $desc = strip_tags((string)$product->getData('description'));
+            $docs[] = [
+                'entity_id'   => (int)$product->getId(),
+                'sku'         => (string)$product->getSku(),
+                'store_id'    => $storeId,
+                'name'        => (string)$product->getName(),
+                'description' => trim($attrText . ' ' . $desc),
+                'status'      => (int)$product->getStatus(),
+                'visibility'  => (int)$product->getVisibility(),
+                'embedding'   => $embeddings[$i],
             ];
-
-            foreach ($attributeCodes as $code) {
-                if ($code === 'sku') {
-                    $doc['sku'] = (string)$product->getSku();
-                } elseif ($code === 'name') {
-                    $doc['name'] = (string)$product->getName();
-                } elseif ($code === 'description') {
-                    $doc['description'] = strip_tags((string)$product->getData('description'));
-                } elseif ($code === 'short_description') {
-                    $doc['short_description'] = strip_tags((string)$product->getData('short_description'));
-                } else {
-                    $doc[$code] = $this->getAttributeValue($product, $code);
-                }
-            }
-            $docs[] = $doc;
         }
 
         $this->openSearchClient->bulk($docs);
@@ -209,76 +178,95 @@ class ProductVector implements ActionInterface, MviewActionInterface
     }
 
     /**
-     * Extracts all searchable/filterable attribute values from the product and its children.
+     * Get all searchable and filterable attributes configured in Magento.
      *
-     * @param ProductInterface $product
-     * @param string $code
-     * @return string
+     * @return string[]
      */
-    private function getAttributeValue(ProductInterface $product, string $code): string
+    private function getSearchableAttributeCodes(): array
     {
-        $attribute = $product->getResource()->getAttribute($code);
-        if (!$attribute) {
-            return '';
-        }
+        if ($this->searchableAttributeCodes === null) {
+            $collection = $this->attributeCollectionFactory->create();
+            $collection->addFieldToFilter(
+                ['is_searchable', 'is_filterable'],
+                [
+                    ['eq' => 1],
+                    ['gt' => 0]
+                ]
+            );
 
-        $values = [];
-
-        // Check main product value
-        $val = $product->getAttributeText($code);
-        if (empty($val)) {
-            $val = $product->getData($code);
-        }
-        if ($val !== null && $val !== '') {
-            if (is_array($val)) {
-                $values = $val;
-            } else {
-                $values[] = (string)$val;
-            }
-        }
-
-        // Check configurable children products
-        if ($product->getTypeId() === 'configurable') {
-            $children = $product->getTypeInstance()->getUsedProducts($product);
-            foreach ($children as $child) {
-                $val = $attribute->getSource()->getOptionText($child->getData($code));
-                if (empty($val)) {
-                    $val = $child->getData($code);
+            $codes = [];
+            foreach ($collection as $attribute) {
+                $code = $attribute->getAttributeCode();
+                if (in_array($code, ['status', 'visibility', 'tax_class_id', 'price', 'url_key', 'name', 'description', 'short_description', 'sku'])) {
+                    continue;
                 }
-                if ($val !== null && $val !== '') {
-                    if (is_array($val)) {
-                        $values = array_merge($values, $val);
-                    } else {
-                        $values[] = (string)$val;
-                    }
-                }
+                $codes[] = $code;
             }
+            $this->searchableAttributeCodes = array_unique($codes);
         }
-
-        $values = array_unique(array_filter($values));
-        return implode(', ', $values);
+        return $this->searchableAttributeCodes;
     }
 
     /**
-     * Retrieves Frontend label for an attribute.
+     * Extracts all searchable/filterable attribute values from the product and its children.
      *
      * @param ProductInterface $product
-     * @param string $code
+     * @param string[] $attributeCodes
      * @return string
      */
-    private function getAttributeLabel(ProductInterface $product, string $code): string
+    private function getProductAttributesText(ProductInterface $product, array $attributeCodes): string
     {
-        $attribute = $product->getResource()->getAttribute($code);
-        if (!$attribute) {
-            return ucfirst(str_replace('_', ' ', $code));
+        $lines = [];
+        foreach ($attributeCodes as $code) {
+            $attribute = $product->getResource()->getAttribute($code);
+            if (!$attribute) {
+                continue;
+            }
+            $label = $attribute->getStoreLabel();
+            if (empty($label)) {
+                $label = $attribute->getFrontendLabel();
+            }
+            if (empty($label)) {
+                $label = ucfirst(str_replace('_', ' ', $code));
+            }
+
+            $values = [];
+            // Check parent
+            $val = $product->getAttributeText($code);
+            if (empty($val)) {
+                $val = $product->getData($code);
+            }
+            if ($val !== null && $val !== '') {
+                if (is_array($val)) {
+                    $values = $val;
+                } else {
+                    $values[] = (string)$val;
+                }
+            }
+
+            // Check children
+            if ($product->getTypeId() === 'configurable') {
+                $children = $product->getTypeInstance()->getUsedProducts($product);
+                foreach ($children as $child) {
+                    $val = $attribute->getSource()->getOptionText($child->getData($code));
+                    if (empty($val)) {
+                        $val = $child->getData($code);
+                    }
+                    if ($val !== null && $val !== '') {
+                        if (is_array($val)) {
+                            $values = array_merge($values, $val);
+                        } else {
+                            $values[] = (string)$val;
+                        }
+                    }
+                }
+            }
+
+            $values = array_unique(array_filter($values));
+            if (!empty($values)) {
+                $lines[] = "{$label}: " . implode(', ', $values) . '.';
+            }
         }
-        $label = $attribute->getStoreLabel();
-        if (empty($label)) {
-            $label = $attribute->getFrontendLabel();
-        }
-        if (empty($label)) {
-            $label = ucfirst(str_replace('_', ' ', $code));
-        }
-        return $label;
+        return implode(' ', $lines);
     }
 }

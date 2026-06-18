@@ -6,8 +6,6 @@ namespace Kkkonrad\VectorSearch\Model\OpenSearch;
 use Magento\Framework\HTTP\Client\Curl;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\Config;
-use Kkkonrad\VectorSearch\Model\AttributeWeightsProvider;
-
 
 /**
  * Lightweight OpenSearch HTTP client (no SDK dependency).
@@ -20,10 +18,9 @@ class Client
     private ?string $version = null;
 
     public function __construct(
-        private readonly Curl                     $curl,
-        private readonly Config                   $config,
-        private readonly LoggerInterface          $logger,
-        private readonly AttributeWeightsProvider $attributeWeightsProvider
+        private readonly Curl            $curl,
+        private readonly Config          $config,
+        private readonly LoggerInterface $logger
     ) {}
 
     private function baseUrl(): string
@@ -129,39 +126,6 @@ class Client
     {
         $this->ensurePipeline();
 
-        $properties = [
-            'entity_id'  => ['type' => 'integer'],
-            'store_id'   => ['type' => 'integer'],
-            'status'     => ['type' => 'integer'],
-            'visibility' => ['type' => 'integer'],
-            'embedding'  => [
-                'type'      => 'knn_vector',
-                'dimension' => 384,
-                'method'    => [
-                    // lucene supports kNN filters natively (required for hybrid/RRF).
-                    // nmslib does NOT support the 'filter' parameter and causes a 400
-                    // error on every hybrid query, falling back to a slow full scan.
-                    'name'       => 'hnsw',
-                    'space_type' => 'cosinesimil',
-                    'engine'     => 'lucene',
-                    'parameters' => [
-                        'ef_construction' => 128,
-                        'm'               => 16,
-                    ],
-                ],
-            ],
-        ];
-
-        // Dynamic attribute mapping
-        $attributeCodes = $this->attributeWeightsProvider->getAttributeCodes();
-        foreach ($attributeCodes as $code) {
-            if ($code === 'sku') {
-                $properties['sku'] = ['type' => 'keyword'];
-            } else {
-                $properties[$code] = ['type' => 'text', 'analyzer' => 'polish_asciifolding'];
-            }
-        }
-
         $mapping = [
             'settings' => [
                 'index' => [
@@ -183,7 +147,31 @@ class Client
                 ],
             ],
             'mappings' => [
-                'properties' => $properties,
+                'properties' => [
+                    'entity_id'   => ['type' => 'integer'],
+                    'sku'         => ['type' => 'keyword'],
+                    'store_id'    => ['type' => 'integer'],
+                    'name'        => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
+                    'description' => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
+                    'status'      => ['type' => 'integer'],
+                    'visibility'  => ['type' => 'integer'],
+                    'embedding'   => [
+                        'type'      => 'knn_vector',
+                        'dimension' => 384,
+                        'method'    => [
+                            // lucene supports kNN filters natively (required for hybrid/RRF).
+                            // nmslib does NOT support the 'filter' parameter and causes a 400
+                            // error on every hybrid query, falling back to a slow full scan.
+                            'name'       => 'hnsw',
+                            'space_type' => 'cosinesimil',
+                            'engine'     => 'lucene',
+                            'parameters' => [
+                                'ef_construction' => 128,
+                                'm'               => 16,
+                            ],
+                        ],
+                    ],
+                ],
             ],
         ];
 
@@ -242,16 +230,6 @@ class Client
         }
         $processedQuery = implode(' ', $wildcardedWords);
 
-        // Build search fields list dynamically based on attribute weights
-        $weights = $this->attributeWeightsProvider->getWeights();
-        $fields = [];
-        foreach ($weights as $code => $weight) {
-            $fields[] = "{$code}^{$weight}";
-        }
-        if (empty($fields)) {
-            $fields = ['name^3', 'description'];
-        }
-
         $query = [
             'size'    => $size,
             '_source' => ['entity_id'],
@@ -263,7 +241,7 @@ class Client
                                 'must'   => [[
                                     'simple_query_string' => [
                                         'query'            => $processedQuery,
-                                        'fields'           => $fields,
+                                        'fields'           => ['name^3', 'description'],
                                         'default_operator' => 'AND',
                                     ],
                                 ]],
