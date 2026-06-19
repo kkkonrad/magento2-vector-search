@@ -14,6 +14,7 @@ class Config
     private const XML_OPENSEARCH_INDEX_NAME = 'vectorsearch/opensearch/index_name';
     private const XML_OPENSEARCH_USERNAME   = 'vectorsearch/opensearch/username';
     private const XML_OPENSEARCH_PASSWORD   = 'vectorsearch/opensearch/password';
+    private const XML_OPENSEARCH_SEARCH_TYPE = 'vectorsearch/opensearch/search_type';
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig,
@@ -72,5 +73,10 @@ class Config
     {
         $encrypted = (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_PASSWORD);
         return $encrypted ? $this->encryptor->decrypt($encrypted) : '';
+    }
+
+    public function getOpenSearchSearchType(): string
+    {
+        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_SEARCH_TYPE) ?: 'hybrid';
     }
 }

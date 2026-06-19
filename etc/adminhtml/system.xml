@@ -33,6 +33,11 @@
                     <comment>Nazwa indeksu kNN w OpenSearch</comment>
                     <validate>required-entry</validate>
                 </field>
+                <field id="search_type" translate="label comment" type="select" sortOrder="35" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Typ wyszukiwania</label>
+                    <comment>Wybierz czy chcesz używać wyszukiwania hybrydowego, czy czystego kNN (semantycznego)</comment>
+                    <source_model>Kkkonrad\VectorSearch\Model\Config\Source\SearchType</source_model>
+                </field>
                 <field id="username" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Username</label>
                     <comment>Opcjonalnie — jeśli OpenSearch ma włączone Basic Auth</comment>

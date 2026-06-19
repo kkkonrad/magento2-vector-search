@@ -24,7 +24,7 @@ class AttributeWeightProvider
     ];
 
     /**
-     * In-process cache: attribute_code → search_weight (int ≥ 1).
+     * In-process cache of all searchable/filterable attribute codes and their weights.
      *
      * @var array<string, int>|null
      */
@@ -36,6 +36,42 @@ class AttributeWeightProvider
     ) {}
 
     /**
+     * Returns all searchable or filterable attribute codes and their weights.
+     *
+     * @return array<string, int>
+     */
+    public function getSearchableWeights(): array
+    {
+        if ($this->cache !== null) {
+            return $this->cache;
+        }
+
+        try {
+            $conn = $this->resource->getConnection();
+            $rows = $conn->fetchAll("
+                SELECT a.attribute_code,
+                       COALESCE(NULLIF(ca.search_weight, 0), 1) AS search_weight
+                FROM   eav_attribute        AS a
+                JOIN   catalog_eav_attribute AS ca ON ca.attribute_id = a.attribute_id
+                WHERE  a.entity_type_id = 4
+                  AND  (ca.is_searchable = 1 OR ca.is_filterable > 0)
+                ORDER  BY a.attribute_code
+            ");
+
+            $result = [];
+            foreach ($rows as $row) {
+                $result[(string)$row['attribute_code']] = (int)$row['search_weight'];
+            }
+            $this->cache = $result;
+        } catch (\Throwable $e) {
+            $this->logger->error('[VectorSearch] AttributeWeightProvider error: ' . $e->getMessage());
+            $this->cache = [];
+        }
+
+        return $this->cache;
+    }
+
+    /**
      * Returns an associative array of attribute_code → search_weight for all
      * searchable or filterable catalog product attributes, excluding the core
      * fields handled separately.
@@ -44,41 +80,14 @@ class AttributeWeightProvider
      */
     public function getWeightedAttributes(): array
     {
-        if ($this->cache !== null) {
-            return $this->cache;
-        }
-
-        try {
-            $conn = $this->resource->getConnection();
-
-            $excluded = implode(
-                ', ',
-                array_map(static fn(string $c): string => $conn->quote($c), self::EXCLUDED_CODES)
-            );
-
-            $rows = $conn->fetchAll("
-                SELECT a.attribute_code,
-                       COALESCE(NULLIF(ca.search_weight, 0), 1) AS search_weight
-                FROM   eav_attribute        AS a
-                JOIN   catalog_eav_attribute AS ca ON ca.attribute_id = a.attribute_id
-                WHERE  a.entity_type_id = 4
-                  AND  (ca.is_searchable = 1 OR ca.is_filterable > 0)
-                  AND  a.attribute_code NOT IN ({$excluded})
-                ORDER  BY a.attribute_code
-            ");
-
-            $result = [];
-            foreach ($rows as $row) {
-                $result[(string)$row['attribute_code']] = (int)$row['search_weight'];
+        $all = $this->getSearchableWeights();
+        $result = [];
+        foreach ($all as $code => $weight) {
+            if (!in_array($code, self::EXCLUDED_CODES, true)) {
+                $result[$code] = $weight;
             }
-
-            $this->cache = $result;
-        } catch (\Throwable $e) {
-            $this->logger->error('[VectorSearch] AttributeWeightProvider error: ' . $e->getMessage());
-            $this->cache = [];
         }
-
-        return $this->cache;
+        return $result;
     }
 
     /**

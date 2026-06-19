@@ -10,6 +10,7 @@
                 <host>localhost</host>
                 <port>9200</port>
                 <index_name>magento_products_vector</index_name>
+                <search_type>hybrid</search_type>
                 <username></username>
                 <password></password>
             </opensearch>

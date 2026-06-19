@@ -15,9 +15,6 @@ class Client
 {
     private const PIPELINE_ID = 'kkkonrad-vectorsearch-rrf';
 
-    /** Weight applied to the 'name' field on top of its Magento weight. */
-    private const NAME_EXTRA_BOOST = 3;
-
     /** Cached OpenSearch version string, e.g. "2.12.0" */
     private ?string $version = null;
 
@@ -239,55 +236,172 @@ class Client
             ['terms' => ['visibility' => [3, 4]]],
         ];
 
+        // Gender intent detection logic
+        $lowerQuery = mb_strtolower($queryText);
+        $words = preg_split('/[^\p{L}\p{N}]+/u', $lowerQuery, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        $malePrefixes = [
+            'męsk', 'mesk', 'mężczyz', 'mezczyz', 'chłopak', 'chlopak', 'chłopiec', 'chlopiec', 'chłopcy', 'chlopcy',
+            'męż', 'meż', 'mez'
+        ];
+        $maleExact = [
+            'boy', 'men', 'man', 'pan', 'pana', 'panów', 'panow', 'panowie', 'facet', 'faceta', 'faceci', 'mąż', 'maz', 'mąz'
+        ];
+
+        $femalePrefixes = [
+            'kobiet', 'damsk', 'dziewczyn', 'żon', 'zon'
+        ];
+        $femaleExact = [
+            'girl', 'woman', 'women', 'pani', 'panie', 'pań'
+        ];
+
+        $isMale = false;
+        foreach ($words as $word) {
+            if (in_array($word, $maleExact, true)) {
+                $isMale = true;
+                break;
+            }
+            foreach ($malePrefixes as $prefix) {
+                if (str_starts_with($word, $prefix)) {
+                    $isMale = true;
+                    break 2;
+                }
+            }
+        }
+
+        $isFemale = false;
+        foreach ($words as $word) {
+            if (in_array($word, $femaleExact, true)) {
+                $isFemale = true;
+                break;
+            }
+            foreach ($femalePrefixes as $prefix) {
+                if (str_starts_with($word, $prefix)) {
+                    $isFemale = true;
+                    break 2;
+                }
+            }
+        }
+
+        if ($isMale && !$isFemale) {
+            $filters[] = [
+                'bool' => [
+                    'must_not' => [
+                        'bool' => [
+                            'must' => [
+                                ['match_phrase' => ['description' => 'Kobiety']]
+                            ],
+                            'must_not' => [
+                                ['match_phrase' => ['description' => 'Mężczyźni']]
+                            ]
+                        ]
+                    ]
+                ]
+            ];
+        } elseif ($isFemale && !$isMale) {
+            $filters[] = [
+                'bool' => [
+                    'must_not' => [
+                        'bool' => [
+                            'must' => [
+                                ['match_phrase' => ['description' => 'Mężczyźni']]
+                            ],
+                            'must_not' => [
+                                ['match_phrase' => ['description' => 'Kobiety']]
+                            ]
+                        ]
+                    ]
+                ]
+            ];
+        }
+
         // Build boosted fields list from Magento attribute search_weight settings.
-        // name gets an extra multiplier so it always dominates over attribute fields.
         // description (which contains category names) and sku are added to ensure they are searched.
-        $weightedAttrs = $this->weightProvider->getWeightedAttributes();
-        $fields        = [
-            'name^' . self::NAME_EXTRA_BOOST,
-            'description^2',
-            'sku^5'
+        $searchableWeights = $this->weightProvider->getSearchableWeights();
+        $weightedAttrs     = $this->weightProvider->getWeightedAttributes();
+        $fields            = [
+            'name^' . ($searchableWeights['name'] ?? 5),
+            'description^' . ($searchableWeights['description'] ?? 1),
+            'sku^' . ($searchableWeights['sku'] ?? 6)
         ];
         foreach ($weightedAttrs as $code => $weight) {
             $fields[] = AttributeWeightProvider::fieldName($code) . '^' . $weight;
         }
 
-        // Hybrid search: kNN (semantic) + multi_match with per-attribute weights.
-        // RRF pipeline merges both rankings — kNN handles morphology/semantics,
-        // multi_match boosts exact attribute matches (color, material, style…).
-        $query = [
-            'size'    => $size,
-            '_source' => ['entity_id'],
-            'query'   => [
-                'hybrid' => [
-                    'queries' => [
-                        [
-                            'bool' => [
-                                'should' => [[
-                                    'multi_match' => [
-                                        'query'    => $queryText,
-                                        'fields'   => $fields,
-                                        'type'     => 'best_fields',
-                                        'operator' => 'or',
-                                        'fuzziness' => 'AUTO',
-                                    ],
-                                ]],
-                                'filter' => $filters,
-                            ],
+        $shouldClauses = [
+            [
+                'multi_match' => [
+                    'query'    => $queryText,
+                    'fields'   => $fields,
+                    'type'     => 'best_fields',
+                    'operator' => 'or',
+                    'fuzziness' => 'AUTO',
+                ],
+            ]
+        ];
+
+        if ($isMale && !$isFemale) {
+            $shouldClauses[] = [
+                'multi_match' => [
+                    'query'  => 'Mężczyźni',
+                    'fields' => ['description^5', 'attr_gender^10'],
+                ]
+            ];
+        } elseif ($isFemale && !$isMale) {
+            $shouldClauses[] = [
+                'multi_match' => [
+                    'query'  => 'Kobiety',
+                    'fields' => ['description^5', 'attr_gender^10'],
+                ]
+            ];
+        }
+
+        $searchType = $this->config->getOpenSearchSearchType();
+        if ($searchType === 'knn') {
+            // Pure kNN semantic search (ignores lexical shouldClauses)
+            $query = [
+                'size'    => $size,
+                '_source' => ['entity_id'],
+                'query'   => [
+                    'knn' => [
+                        'embedding' => [
+                            'vector' => $vector,
+                            'k'      => $size,
+                            'filter' => ['bool' => ['filter' => $filters]],
                         ],
-                        [
-                            'knn' => [
-                                'embedding' => [
-                                    'vector' => $vector,
-                                    'k'      => $size,
-                                    'filter' => ['bool' => ['filter' => $filters]],
+                    ],
+                ],
+            ];
+        } else {
+            // Hybrid search: kNN (semantic) + multi_match with per-attribute weights.
+            // RRF pipeline merges both rankings — kNN handles morphology/semantics,
+            // multi_match boosts exact attribute matches (color, material, style…).
+            $query = [
+                'size'    => $size,
+                '_source' => ['entity_id'],
+                'query'   => [
+                    'hybrid' => [
+                        'queries' => [
+                            [
+                                'bool' => [
+                                    'should' => $shouldClauses,
+                                    'filter' => $filters,
+                                ],
+                            ],
+                            [
+                                'knn' => [
+                                    'embedding' => [
+                                        'vector' => $vector,
+                                        'k'      => $size,
+                                        'filter' => ['bool' => ['filter' => $filters]],
+                                    ],
                                 ],
                             ],
                         ],
                     ],
                 ],
-            ],
-        ];
+            ];
+        }
 
         $response = $this->request('POST', '/' . $this->indexName() . '/_search', $query);
         $hits     = $response['hits']['hits'] ?? [];
