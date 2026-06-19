@@ -30,6 +30,11 @@
                     <comment>Wybierz czy chcesz używać wyszukiwania hybrydowego, czy czystego kNN (semantycznego)</comment>
                     <source_model>Kkkonrad\VectorSearch\Model\Config\Source\SearchType</source_model>
                 </field>
+                <field id="min_similarity" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Minimalne podobieństwo wektorowe</label>
+                    <comment>Próg podobieństwa cosinusowego dla wyszukiwania kNN (wartość od 0 do 1, zalecana: 0.90). Wyszukiwanie odrzuci wyniki poniżej tego progu.</comment>
+                    <validate>validate-number required-entry</validate>
+                </field>
             </group>
         </section>
     </system>

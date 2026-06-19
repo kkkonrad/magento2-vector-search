@@ -11,6 +11,8 @@ class Config
     private const XML_OPENSEARCH_INDEX_NAME = 'vectorsearch/opensearch/index_name';
     private const XML_OPENSEARCH_SEARCH_TYPE = 'vectorsearch/opensearch/search_type';
 
+    private const XML_OPENSEARCH_MIN_SIMILARITY = 'vectorsearch/opensearch/min_similarity';
+
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig
     ) {}
@@ -99,5 +101,11 @@ class Config
     public function getOpenSearchSearchType(): string
     {
         return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_SEARCH_TYPE) ?: 'hybrid';
+    }
+
+    public function getOpenSearchMinSimilarity(): float
+    {
+        $val = $this->scopeConfig->getValue(self::XML_OPENSEARCH_MIN_SIMILARITY);
+        return $val !== null && $val !== '' ? (float)$val : 0.90;
     }
 }

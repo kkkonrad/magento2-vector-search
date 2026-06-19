@@ -11,6 +11,7 @@
                 <port>9200</port>
                 <index_name>magento_products_vector</index_name>
                 <search_type>hybrid</search_type>
+                <min_similarity>0.90</min_similarity>
                 <username></username>
                 <password></password>
             </opensearch>

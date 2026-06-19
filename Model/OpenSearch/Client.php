@@ -414,6 +414,10 @@ class Client
             ];
         }
 
+        $minSimilarity = $this->config->getOpenSearchMinSimilarity();
+        $minSimilarity = max(-1.0, min(1.0, $minSimilarity));
+        $minScore = 1.0 / (2.0 - $minSimilarity);
+
         $searchType = $this->config->getOpenSearchSearchType();
         if ($searchType === 'pure_knn' || $searchType === 'knn') {
             // Pure kNN semantic search (ignores lexical shouldClauses)
@@ -456,7 +460,7 @@ class Client
                                 'knn' => [
                                     'embedding' => [
                                         'vector' => $vector,
-                                        'k'      => $size,
+                                        'min_score' => $minScore,
                                         'filter' => ['bool' => ['filter' => $filters]],
                                     ],
                                 ],
@@ -469,6 +473,13 @@ class Client
 
         $response = $this->request('POST', '/' . $this->indexName() . '/_search', $query);
         $hits     = $response['hits']['hits'] ?? [];
+
+        if ($searchType !== 'hybrid') {
+            $hits = array_filter(
+                $hits,
+                static fn(array $hit): bool => ($hit['_score'] ?? 0.0) >= $minScore
+            );
+        }
 
         return array_map(
             static fn(array $hit): int => (int)$hit['_source']['entity_id'],
