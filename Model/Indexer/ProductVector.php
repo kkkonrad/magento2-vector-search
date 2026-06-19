@@ -212,13 +212,32 @@ class ProductVector implements ActionInterface, MviewActionInterface
             return;
         }
 
+        // Bulk load category IDs for all products in this batch from DB
+        $productIds = array_column($batch, 'entity_id');
+        $batchCategoryIds = [];
+        try {
+            $conn = $this->resource->getConnection();
+            $select = $conn->select()
+                ->from($conn->getTableName('catalog_category_product'), ['product_id', 'category_id'])
+                ->where('product_id IN (?)', $productIds);
+            $rows = $conn->fetchAll($select);
+            foreach ($rows as $row) {
+                $pId = (int)$row['product_id'];
+                $cId = (int)$row['category_id'];
+                $batchCategoryIds[$pId][] = $cId;
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('[VectorSearch] Error loading batch category IDs: ' . $e->getMessage());
+        }
+
         // Build embedding texts from the mapped ES documents.
         $texts = [];
         $hashes = [];
         $modelName = $this->embeddingClient->getModelName();
         foreach ($batch as $item) {
             $doc = $item['doc'];
-            $categoryIds = isset($doc['category_ids']) && is_array($doc['category_ids']) ? $doc['category_ids'] : [];
+            $entityId = (int)$item['entity_id'];
+            $categoryIds = $batchCategoryIds[$entityId] ?? [];
             $categoryNames = $this->getProductCategoryNames($categoryIds);
             $text = $this->buildEmbeddingText($doc, $item['product_data'], $categoryNames);
             $texts[] = $text;
@@ -290,7 +309,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
             $productData = $item['product_data'];
             $doc         = $item['doc'];
 
-            $categoryIds = isset($doc['category_ids']) && is_array($doc['category_ids']) ? $doc['category_ids'] : [];
+            $categoryIds = $batchCategoryIds[$entityId] ?? [];
             $categoryNames = $this->getProductCategoryNames($categoryIds);
 
             // Build per-attribute OpenSearch fields from the *_value entries in the
