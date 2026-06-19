@@ -163,6 +163,7 @@ class Client
         foreach (array_keys($this->weightProvider->getWeightedAttributes()) as $code) {
             $fieldName                  = AttributeWeightProvider::fieldName($code);
             $attrProperties[$fieldName] = ['type' => 'text', 'analyzer' => 'polish_asciifolding'];
+            $attrProperties[$fieldName . '_id'] = ['type' => 'keyword'];
         }
 
         $isHybrid = $this->config->getOpenSearchSearchType() === 'hybrid';
@@ -191,14 +192,15 @@ class Client
             'mappings' => [
                 'properties' => array_merge(
                     [
-                        'entity_id'   => ['type' => 'integer'],
-                        'sku'         => ['type' => 'keyword'],
-                        'store_id'    => ['type' => 'integer'],
-                        'name'        => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
-                        'description' => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
-                        'status'      => ['type' => 'integer'],
-                        'visibility'  => ['type' => 'integer'],
-                        'embedding'   => [
+                        'entity_id'    => ['type' => 'integer'],
+                        'sku'          => ['type' => 'keyword'],
+                        'store_id'     => ['type' => 'integer'],
+                        'category_ids' => ['type' => 'integer'],
+                        'name'         => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
+                        'description'  => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
+                        'status'       => ['type' => 'integer'],
+                        'visibility'   => ['type' => 'integer'],
+                        'embedding'    => [
                             'type'      => 'knn_vector',
                             'dimension' => 384,
                             'method'    => [
@@ -258,13 +260,37 @@ class Client
     // Search
     // -------------------------------------------------------------------------
 
-    public function hybridSearch(string $queryText, array $vector, int $size = 20, int $storeId = 1): array
-    {
+    public function hybridSearch(
+        string $queryText,
+        array $vector,
+        int $size = 20,
+        int $storeId = 1,
+        array $criteriaFilters = []
+    ): array {
         $filters = [
             ['term'  => ['status'     => 1]],
             ['term'  => ['store_id'   => $storeId]],
             ['terms' => ['visibility' => [3, 4]]],
         ];
+
+        // Apply criteria filters dynamically
+        foreach ($criteriaFilters as $filter) {
+            $field = $filter['field'];
+            $value = $filter['value'];
+            
+            if ($field === 'category_ids' || $field === 'category_id') {
+                $valArray = is_array($value) ? $value : [$value];
+                $filters[] = ['terms' => ['category_ids' => array_map('intval', $valArray)]];
+            } else {
+                // EAV attributes, mapped to attr_{code}_id
+                $mappedField = 'attr_' . $field . '_id';
+                if (is_array($value)) {
+                    $filters[] = ['terms' => [$mappedField => $value]];
+                } else {
+                    $filters[] = ['term' => [$mappedField => $value]];
+                }
+            }
+        }
 
         // Gender intent detection logic
         $lowerQuery = mb_strtolower($queryText);

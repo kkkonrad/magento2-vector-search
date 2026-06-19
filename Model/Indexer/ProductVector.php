@@ -240,6 +240,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
             // Note: ProductDataMapper may return *_value as an array (multiple variant values).
             $perAttrFields = [];
             foreach ($weightedAttrCodes as $code) {
+                // 1. Text value for search term boosting
                 $valueKey = $code . '_value';
                 if (isset($doc[$valueKey])) {
                     $str = $this->docFieldToString($doc[$valueKey]);
@@ -247,18 +248,29 @@ class ProductVector implements ActionInterface, MviewActionInterface
                         $perAttrFields[AttributeWeightProvider::fieldName($code)] = $this->stemmer->stemText($str);
                     }
                 }
+                
+                // 2. Option ID value for precise filtering
+                if (isset($doc[$code])) {
+                    $val = $doc[$code];
+                    if (is_array($val)) {
+                        $perAttrFields[AttributeWeightProvider::fieldName($code) . '_id'] = array_map('intval', $val);
+                    } elseif ($val !== null && $val !== '') {
+                        $perAttrFields[AttributeWeightProvider::fieldName($code) . '_id'] = (int)$val;
+                    }
+                }
             }
 
             $docs[] = array_merge(
                 [
-                    'entity_id'   => $entityId,
-                    'sku'         => (string)($productData['sku'] ?? ''),
-                    'store_id'    => $storeId,
-                    'name'        => $this->stemmer->stemText($this->docFieldToString($doc['name'] ?? $productData['name'] ?? '')),
-                    'description' => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
-                    'status'      => (int)($productData['status'] ?? 1),
-                    'visibility'  => (int)($productData['visibility'] ?? 4),
-                    'embedding'   => $embeddings[$i],
+                    'entity_id'    => $entityId,
+                    'sku'          => (string)($productData['sku'] ?? ''),
+                    'store_id'     => $storeId,
+                    'category_ids' => array_map('intval', $categoryIds),
+                    'name'         => $this->stemmer->stemText($this->docFieldToString($doc['name'] ?? $productData['name'] ?? '')),
+                    'description'  => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
+                    'status'       => (int)($productData['status'] ?? 1),
+                    'visibility'   => (int)($productData['visibility'] ?? 4),
+                    'embedding'    => $embeddings[$i],
                 ],
                 $perAttrFields
             );

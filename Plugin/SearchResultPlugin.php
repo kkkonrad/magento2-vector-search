@@ -60,7 +60,8 @@ class SearchResultPlugin
 
         try {
             $storeId   = (int)$this->storeManager->getStore()->getId();
-            $entityIds = $this->getEntityIds($queryText, $storeId);
+            $criteriaFilters = $this->getRequestFilters();
+            $entityIds = $this->getEntityIds($queryText, $storeId, $criteriaFilters);
 
             if (empty($entityIds)) {
                 $result->setItems([]);
@@ -91,13 +92,40 @@ class SearchResultPlugin
     }
 
     /**
+     * Extracts layered navigation filters from request parameters.
+     */
+    private function getRequestFilters(): array
+    {
+        $params = $this->request->getParams();
+        $excluded = [
+            'q', 'p', 'product_list_order', 'product_list_dir', 
+            'product_list_limit', 'product_list_mode', 'id', 'ajax'
+        ];
+        $filters = [];
+        foreach ($params as $field => $value) {
+            if (in_array($field, $excluded, true)) {
+                continue;
+            }
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $filters[] = [
+                'field' => $field,
+                'value' => $value
+            ];
+        }
+        return $filters;
+    }
+
+    /**
      * Retrieve entity IDs from hybrid search, using two-level cache.
      *
      * @return int[]
      */
-    private function getEntityIds(string $queryText, int $storeId): array
+    private function getEntityIds(string $queryText, int $storeId, array $criteriaFilters): array
     {
-        $cacheKey = $storeId . ':' . $queryText;
+        $filterHash = md5(json_encode($criteriaFilters));
+        $cacheKey   = $storeId . ':' . $queryText . ':' . $filterHash;
 
         // Level 1: in-process static cache
         if (array_key_exists($cacheKey, self::$processCache)) {
@@ -121,7 +149,7 @@ class SearchResultPlugin
         }
 
         // Query up to 100 results to support pagination
-        $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 100, $storeId);
+        $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 100, $storeId, $criteriaFilters);
 
         self::$processCache[$cacheKey] = $ids;
         $this->cache->save(

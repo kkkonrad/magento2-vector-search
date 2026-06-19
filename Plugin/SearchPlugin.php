@@ -73,7 +73,8 @@ class SearchPlugin
 
         try {
             $storeId  = (int)$this->storeManager->getStore()->getId();
-            $entityIds = $this->getEntityIds($queryText, $storeId);
+            $criteriaFilters = $this->getRequestFilters();
+            $entityIds = $this->getEntityIds($queryText, $storeId, $criteriaFilters);
 
             if (empty($entityIds)) {
                 return $result;
@@ -109,6 +110,32 @@ class SearchPlugin
         return $result;
     }
 
+    /**
+     * Extracts layered navigation filters from request parameters.
+     */
+    private function getRequestFilters(): array
+    {
+        $params = $this->request->getParams();
+        $excluded = [
+            'q', 'p', 'product_list_order', 'product_list_dir', 
+            'product_list_limit', 'product_list_mode', 'id', 'ajax'
+        ];
+        $filters = [];
+        foreach ($params as $field => $value) {
+            if (in_array($field, $excluded, true)) {
+                continue;
+            }
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $filters[] = [
+                'field' => $field,
+                'value' => $value
+            ];
+        }
+        return $filters;
+    }
+
     // -------------------------------------------------------------------------
 
     /**
@@ -118,9 +145,10 @@ class SearchPlugin
      *
      * @return int[]
      */
-    private function getEntityIds(string $queryText, int $storeId): array
+    private function getEntityIds(string $queryText, int $storeId, array $criteriaFilters): array
     {
-        $cacheKey = $storeId . ':' . $queryText;
+        $filterHash = md5(json_encode($criteriaFilters));
+        $cacheKey   = $storeId . ':' . $queryText . ':' . $filterHash;
 
         // Level 1: in-process static cache (same PHP process / request).
         if (array_key_exists($cacheKey, self::$processCache)) {
@@ -143,7 +171,7 @@ class SearchPlugin
             return self::$processCache[$cacheKey] = [];
         }
 
-        $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 50, $storeId);
+        $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 50, $storeId, $criteriaFilters);
 
         // Persist to both caches.
         self::$processCache[$cacheKey] = $ids;
