@@ -32,15 +32,23 @@
                 </field>
                 <field id="hybrid_combination_technique" translate="label comment" type="select" sortOrder="36" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Metoda łączenia w wyszukiwaniu hybrydowym</label>
-                    <comment>Wybierz metodę łączenia wyników leksykalnych i semantycznych. RRF jest oparty na pozycjach, a Średnia Arytmetyczna łączy wyniki punktowe.</comment>
+                    <comment>Wybierz metodę łączenia wyników leksykalnych i semantycznych. RRF jest oparty na pozycjach, a Średnie (Arytmetyczna, Geometryczna, Harmoniczna) łączą wyniki punktowe.</comment>
                     <source_model>Kkkonrad\VectorSearch\Model\Config\Source\CombinationTechnique</source_model>
+                </field>
+                <field id="hybrid_normalization_technique" translate="label comment" type="select" sortOrder="36.5" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Metoda normalizacji punktacji</label>
+                    <comment>Wybierz metodę normalizacji ocen punktowych przed ich połączeniem (zalecana: Min Max). Ma zastosowanie tylko dla metod średnich.</comment>
+                    <source_model>Kkkonrad\VectorSearch\Model\Config\Source\NormalizationTechnique</source_model>
+                    <depends>
+                        <field id="hybrid_combination_technique" separator=",">arithmetic_mean,geometric_mean,harmonic_mean</field>
+                    </depends>
                 </field>
                 <field id="lexical_weight" translate="label comment" type="text" sortOrder="37" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Waga wyszukiwania tekstowego (leksykalnego)</label>
                     <comment>Wartość od 0.0 do 1.0 (np. 0.7). Suma wag tekstowego i wektorowego musi wynosić dokładnie 1.0.</comment>
                     <validate>validate-number required-entry</validate>
                     <depends>
-                        <field id="hybrid_combination_technique">arithmetic_mean</field>
+                        <field id="hybrid_combination_technique" separator=",">arithmetic_mean,geometric_mean,harmonic_mean</field>
                     </depends>
                 </field>
                 <field id="knn_weight" translate="label comment" type="text" sortOrder="38" showInDefault="1" showInWebsite="0" showInStore="0">
@@ -48,7 +56,7 @@
                     <comment>Wartość od 0.0 do 1.0 (np. 0.3). Suma wag tekstowego i wektorowego musi wynosić dokładnie 1.0.</comment>
                     <validate>validate-number required-entry</validate>
                     <depends>
-                        <field id="hybrid_combination_technique">arithmetic_mean</field>
+                        <field id="hybrid_combination_technique" separator=",">arithmetic_mean,geometric_mean,harmonic_mean</field>
                     </depends>
                 </field>
                 <field id="min_similarity" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">

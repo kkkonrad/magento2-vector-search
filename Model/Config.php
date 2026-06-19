@@ -14,6 +14,7 @@ class Config
     private const XML_OPENSEARCH_MIN_SIMILARITY = 'vectorsearch/opensearch/min_similarity';
 
     private const XML_OPENSEARCH_COMBINATION_TECHNIQUE = 'vectorsearch/opensearch/hybrid_combination_technique';
+    private const XML_OPENSEARCH_NORMALIZATION_TECHNIQUE = 'vectorsearch/opensearch/hybrid_normalization_technique';
     private const XML_OPENSEARCH_LEXICAL_WEIGHT = 'vectorsearch/opensearch/lexical_weight';
     private const XML_OPENSEARCH_KNN_WEIGHT = 'vectorsearch/opensearch/knn_weight';
     private const XML_OPENSEARCH_SEARCH_LIMIT = 'vectorsearch/opensearch/search_limit';
@@ -28,6 +29,11 @@ class Config
             (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_EMBEDDING_SERVICE_URL),
             '/'
         );
+    }
+
+    public function getOpenSearchNormalizationTechnique(): string
+    {
+        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_NORMALIZATION_TECHNIQUE) ?: 'min_max';
     }
 
     public function getOpenSearchCombinationTechnique(): string

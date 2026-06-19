@@ -14,7 +14,9 @@ class CombinationTechnique implements OptionSourceInterface
     {
         return [
             ['value' => 'rrf', 'label' => __('Reciprocal Rank Fusion (RRF)')],
-            ['value' => 'arithmetic_mean', 'label' => __('Score Combination (Arithmetic Mean)')]
+            ['value' => 'arithmetic_mean', 'label' => __('Score Combination (Arithmetic Mean)')],
+            ['value' => 'geometric_mean', 'label' => __('Score Combination (Geometric Mean)')],
+            ['value' => 'harmonic_mean', 'label' => __('Score Combination (Harmonic Mean)')]
         ];
     }
 }

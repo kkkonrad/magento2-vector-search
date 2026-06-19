@@ -11,7 +11,8 @@
                 <port>9200</port>
                 <index_name>magento_products_vector</index_name>
                 <search_type>hybrid</search_type>
-                <hybrid_combination_technique>rrf</hybrid_combination_technique>
+                <hybrid_combination_technique>arithmetic_mean</hybrid_combination_technique>
+                <hybrid_normalization_technique>min_max</hybrid_normalization_technique>
                 <lexical_weight>0.7</lexical_weight>
                 <knn_weight>0.3</knn_weight>
                 <min_similarity>0.90</min_similarity>

@@ -97,7 +97,9 @@ class Client
 
         if ($useRrf) {
             $technique = $this->config->getOpenSearchCombinationTechnique();
-            if ($technique === 'arithmetic_mean') {
+            $norm = $this->config->getOpenSearchNormalizationTechnique();
+
+            if (in_array($technique, ['arithmetic_mean', 'geometric_mean', 'harmonic_mean'], true)) {
                 $lexicalWeight = $this->config->getOpenSearchLexicalWeight();
                 $knnWeight     = $this->config->getOpenSearchKnnWeight();
                 // Ensure weights sum up to exactly 1.0
@@ -111,9 +113,9 @@ class Client
                 }
 
                 $normalizationProcessor = [
-                    'normalization' => ['technique' => 'min_max'],
+                    'normalization' => ['technique' => $norm],
                     'combination'   => [
-                        'technique'  => 'arithmetic_mean',
+                        'technique'  => $technique,
                         'parameters' => [
                             'weights' => [
                                 round($lexicalWeight, 4),
@@ -123,7 +125,7 @@ class Client
                     ],
                 ];
                 $this->logger->info(
-                    "[VectorSearch] OpenSearch {$version}: using Arithmetic Mean pipeline with weights "
+                    "[VectorSearch] OpenSearch {$version}: using {$technique} pipeline with {$norm} normalization and weights "
                     . "[lexical: {$lexicalWeight}, knn: {$knnWeight}]."
                 );
             } else {
