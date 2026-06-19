@@ -1,0 +1,11 @@
+vectorsearch/opensearch/search_type - hybrid
+vectorsearch/opensearch/host - localhost
+vectorsearch/opensearch/port - 9200
+vectorsearch/opensearch/index_name - magento_products_vector
+vectorsearch/opensearch/username - 
+vectorsearch/opensearch/password - 
+vectorsearch/opensearch/min_similarity - 1
+vectorsearch/opensearch/hybrid_combination_technique - arithmetic_mean
+vectorsearch/opensearch/lexical_weight - 0.9
+vectorsearch/opensearch/knn_weight - 0.5
+vectorsearch/embedding/service_url - http://localhost:3000
