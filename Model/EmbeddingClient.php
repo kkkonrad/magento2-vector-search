@@ -110,11 +110,18 @@ class EmbeddingClient
         return $result[0] ?? [];
     }
 
+    private ?int $dimension = null;
+    private ?string $modelName = null;
+
     /**
      * Fetch the active dimension of the loaded embedding model from the service health check.
      */
     public function getDimension(): int
     {
+        if ($this->dimension !== null) {
+            return $this->dimension;
+        }
+
         try {
             $ch = curl_init($this->config->getEmbeddingServiceUrl() . '/health');
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -124,7 +131,7 @@ class EmbeddingClient
             if ($res !== false) {
                 $data = json_decode((string)$res, true);
                 if (isset($data['dimension']) && is_numeric($data['dimension'])) {
-                    return (int)$data['dimension'];
+                    return $this->dimension = (int)$data['dimension'];
                 }
             }
         } catch (\Exception $e) {
@@ -138,6 +145,10 @@ class EmbeddingClient
      */
     public function getModelName(): string
     {
+        if ($this->modelName !== null) {
+            return $this->modelName;
+        }
+
         try {
             $ch = curl_init($this->config->getEmbeddingServiceUrl() . '/health');
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -147,7 +158,7 @@ class EmbeddingClient
             if ($res !== false) {
                 $data = json_decode((string)$res, true);
                 if (isset($data['model'])) {
-                    return (string)$data['model'];
+                    return $this->modelName = (string)$data['model'];
                 }
             }
         } catch (\Exception $e) {

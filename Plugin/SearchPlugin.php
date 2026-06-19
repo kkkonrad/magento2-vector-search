@@ -51,7 +51,8 @@ class SearchPlugin
         private readonly StoreManagerInterface $storeManager,
         private readonly CacheInterface        $cache,
         private readonly LoggerInterface       $logger,
-        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState
+        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState,
+        private readonly \Kkkonrad\VectorSearch\Model\Config $config
     ) {}
 
 
@@ -119,7 +120,7 @@ class SearchPlugin
         $params = $this->request->getParams();
         $excluded = [
             'q', 'p', 'product_list_order', 'product_list_dir', 
-            'product_list_limit', 'product_list_mode', 'id', 'ajax'
+            'product_list_limit', 'product_list_mode', 'id', 'ajax', 'price'
         ];
         $filters = [];
         foreach ($params as $field => $value) {
@@ -177,7 +178,13 @@ class SearchPlugin
             return self::$processCache[$cacheKey] = [];
         }
 
-        $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 50, $storeId, $criteriaFilters);
+        $ids = $this->openSearchClient->hybridSearch(
+            $queryText,
+            $vector,
+            $this->config->getOpenSearchSearchLimit(),
+            $storeId,
+            $criteriaFilters
+        );
 
         // Persist to both caches.
         self::$processCache[$cacheKey] = $ids;

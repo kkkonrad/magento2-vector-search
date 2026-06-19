@@ -148,11 +148,20 @@ class PolishStemmer
     }
 
     /**
+     * In-process cache of stemmed words.
+     * @var array<string, string>
+     */
+    private array $stemCache = [];
+
+    /**
      * Stems a single Polish word.
      */
     public function stem(string $word): string
     {
         $word = mb_strtolower($word);
+        if (isset($this->stemCache[$word])) {
+            return $this->stemCache[$word];
+        }
         $stem = $word;
         $stem = self::removeNouns($stem);
         $stem = self::removeDiminutive($stem);
@@ -161,8 +170,9 @@ class PolishStemmer
         $stem = self::removeVerbsEnds($stem);
         $stem = self::removeAdverbsEnds($stem);
         $stem = self::removeGeneralEnds($stem);
-        return $stem;
+        return $this->stemCache[$word] = $stem;
     }
+
 
     /**
      * Stems all Polish words in a given text while preserving punctuation and spacing.

@@ -187,7 +187,28 @@ class Client
     {
         $this->ensurePipeline();
 
-        if (!$forceRecreate && $this->indexExists()) {
+        $exists = $this->indexExists();
+        $dimensionMismatch = false;
+
+        if ($exists) {
+            try {
+                $response = $this->request('GET', '/' . $this->indexName() . '/_mapping', [], false);
+                $props = $response[$this->indexName()]['mappings']['properties'] ?? [];
+                $existingDim = $props['embedding']['dimension'] ?? null;
+                $activeDim = $this->embeddingClient->getDimension();
+                if ($existingDim !== null && (int)$existingDim !== $activeDim) {
+                    $dimensionMismatch = true;
+                    $this->logger->warning(
+                        "[VectorSearch] Dimension mismatch detected (existing: {$existingDim}, active: {$activeDim}). "
+                        . "Recreating index."
+                    );
+                }
+            } catch (\Throwable $e) {
+                // If checking mappings fails, do not force recreate
+            }
+        }
+
+        if (!$forceRecreate && $exists && !$dimensionMismatch) {
             return;
         }
 
@@ -225,15 +246,16 @@ class Client
             'mappings' => [
                 'properties' => array_merge(
                     [
-                        'entity_id'    => ['type' => 'integer'],
-                        'sku'          => ['type' => 'keyword'],
-                        'store_id'     => ['type' => 'integer'],
-                        'category_ids' => ['type' => 'integer'],
-                        'name'         => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
-                        'description'  => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
-                        'status'       => ['type' => 'integer'],
-                        'visibility'   => ['type' => 'integer'],
-                        'embedding'    => [
+                        'entity_id'           => ['type' => 'integer'],
+                        'sku'                 => ['type' => 'keyword'],
+                        'store_id'            => ['type' => 'integer'],
+                        'category_ids'        => ['type' => 'integer'],
+                        'name'                => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
+                        'description'         => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
+                        'status'              => ['type' => 'integer'],
+                        'visibility'          => ['type' => 'integer'],
+                        'embedding_text_hash' => ['type' => 'keyword'],
+                        'embedding'           => [
                             'type'      => 'knn_vector',
                             'dimension' => $this->embeddingClient->getDimension(),
                             'method'    => [
@@ -311,7 +333,7 @@ class Client
             $field = $filter['field'];
             $value = $filter['value'];
             
-            if ($field === 'category_ids' || $field === 'category_id') {
+            if ($field === 'category_ids' || $field === 'category_id' || $field === 'cat') {
                 $valArray = is_array($value) ? $value : [$value];
                 $filters[] = ['terms' => ['category_ids' => array_map('intval', $valArray)]];
             } else {
@@ -372,16 +394,29 @@ class Client
             }
         }
 
+        $femaleQuery = $this->stemmer->stemText('Kobiety Damski');
+        $maleQuery   = $this->stemmer->stemText('Mężczyźni Męski');
+
         if ($isMale && !$isFemale) {
             $filters[] = [
                 'bool' => [
                     'must_not' => [
                         'bool' => [
                             'must' => [
-                                ['match_phrase' => ['description' => $this->stemmer->stem('Kobiety')]]
+                                [
+                                    'multi_match' => [
+                                        'query' => $femaleQuery,
+                                        'fields' => ['name', 'description', 'attr_gender']
+                                    ]
+                                ]
                             ],
                             'must_not' => [
-                                ['match_phrase' => ['description' => $this->stemmer->stem('Mężczyźni')]]
+                                [
+                                    'multi_match' => [
+                                        'query' => $maleQuery,
+                                        'fields' => ['name', 'description', 'attr_gender']
+                                    ]
+                                ]
                             ]
                         ]
                     ]
@@ -393,10 +428,20 @@ class Client
                     'must_not' => [
                         'bool' => [
                             'must' => [
-                                ['match_phrase' => ['description' => $this->stemmer->stem('Mężczyźni')]]
+                                [
+                                    'multi_match' => [
+                                        'query' => $maleQuery,
+                                        'fields' => ['name', 'description', 'attr_gender']
+                                    ]
+                                ]
                             ],
                             'must_not' => [
-                                ['match_phrase' => ['description' => $this->stemmer->stem('Kobiety')]]
+                                [
+                                    'multi_match' => [
+                                        'query' => $femaleQuery,
+                                        'fields' => ['name', 'description', 'attr_gender']
+                                    ]
+                                ]
                             ]
                         ]
                     ]
@@ -434,14 +479,14 @@ class Client
         if ($isMale && !$isFemale) {
             $shouldClauses[] = [
                 'multi_match' => [
-                    'query'  => $this->stemmer->stem('Mężczyźni'),
+                    'query'  => $maleQuery,
                     'fields' => ['description^5', 'attr_gender^10'],
                 ]
             ];
         } elseif ($isFemale && !$isMale) {
             $shouldClauses[] = [
                 'multi_match' => [
-                    'query'  => $this->stemmer->stem('Kobiety'),
+                    'query'  => $femaleQuery,
                     'fields' => ['description^5', 'attr_gender^10'],
                 ]
             ];
@@ -524,6 +569,67 @@ class Client
     {
         $this->request('DELETE', '/' . $this->indexName() . "/_doc/{$entityId}", [], false);
     }
+
+    /**
+     * Retrieve existing documents from OpenSearch to fetch current hashes and embeddings.
+     *
+     * @param int[] $entityIds
+     * @return array
+     */
+    public function getDocsForHashCheck(array $entityIds): array
+    {
+        if (empty($entityIds)) {
+            return [];
+        }
+
+        $query = [
+            'size' => count($entityIds),
+            '_source' => ['entity_id', 'embedding_text_hash', 'embedding'],
+            'query' => [
+                'terms' => [
+                    'entity_id' => array_map('intval', $entityIds)
+                ]
+            ]
+        ];
+
+        return $this->request('POST', '/' . $this->indexName() . '/_search', $query, false);
+    }
+
+    /**
+     * Delete from OpenSearch any products for this store_id that were NOT processed (i.e. deleted/disabled in Magento)
+     *
+     * @param int $storeId
+     * @param int[] $processedIds
+     * @return void
+     */
+    public function deleteOrphanedProducts(int $storeId, array $processedIds): void
+    {
+        if (empty($processedIds)) {
+            // Delete everything for this store if nothing was processed
+            $query = [
+                'query' => [
+                    'term' => ['store_id' => $storeId]
+                ]
+            ];
+        } else {
+            $query = [
+                'query' => [
+                    'bool' => [
+                        'must' => [
+                            ['term' => ['store_id' => $storeId]]
+                        ],
+                        'must_not' => [
+                            ['terms' => ['entity_id' => array_map('intval', $processedIds)]]
+                        ]
+                    ]
+                ]
+            ];
+        }
+
+        $this->request('POST', '/' . $this->indexName() . '/_delete_by_query', $query, false);
+    }
+
+
 
     // -------------------------------------------------------------------------
     // Internal HTTP helpers

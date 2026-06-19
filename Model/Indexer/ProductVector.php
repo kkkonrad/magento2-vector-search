@@ -58,8 +58,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
     public function executeFull(): void
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
-        // Full reindex forces a recreation of the index to apply mapping changes
-        $this->openSearchClient->ensureIndex(true);
+        // Recreate index only if there is a dimension/mapping mismatch (handled inside ensureIndex)
+        $this->openSearchClient->ensureIndex(false);
 
         foreach ($this->storeManager->getStores() as $store) {
             $storeId = (int)$store->getId();
@@ -188,6 +188,14 @@ class ProductVector implements ActionInterface, MviewActionInterface
                 $this->openSearchClient->deleteProduct($deleteId);
                 $this->logger->info("[VectorSearch] Deleted product {$deleteId} from index.");
             }
+        } else {
+            // Full reindex: clean up any orphaned documents from the index that are not present in Magento DB
+            try {
+                $this->openSearchClient->deleteOrphanedProducts($storeId, $processedIds);
+                $this->logger->info("[VectorSearch] Cleaned up orphaned products for store {$storeId}.");
+            } catch (\Throwable $e) {
+                $this->logger->error("[VectorSearch] Error cleaning orphaned products: " . $e->getMessage());
+            }
         }
     }
 
@@ -206,18 +214,68 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
         // Build embedding texts from the mapped ES documents.
         $texts = [];
+        $hashes = [];
+        $modelName = $this->embeddingClient->getModelName();
         foreach ($batch as $item) {
             $doc = $item['doc'];
             $categoryIds = isset($doc['category_ids']) && is_array($doc['category_ids']) ? $doc['category_ids'] : [];
             $categoryNames = $this->getProductCategoryNames($categoryIds);
-            $texts[] = $this->buildEmbeddingText($doc, $item['product_data'], $categoryNames);
+            $text = $this->buildEmbeddingText($doc, $item['product_data'], $categoryNames);
+            $texts[] = $text;
+            $hashes[] = md5($modelName . ':' . $text);
         }
 
+        // Fetch existing hashes and embeddings from OpenSearch
+        $existingHashes = [];
+        $existingEmbeddings = [];
         try {
-            $embeddings = $this->embeddingClient->embed($texts, 'passage');
-        } catch (\RuntimeException $e) {
-            $this->logger->error('[VectorSearch] Batch embedding failed: ' . $e->getMessage());
-            throw $e;
+            $entityIds = array_column($batch, 'entity_id');
+            $response = $this->openSearchClient->getDocsForHashCheck($entityIds);
+            foreach ($response['hits']['hits'] ?? [] as $hit) {
+                $source = $hit['_source'] ?? [];
+                $id = (int)($source['entity_id'] ?? 0);
+                if ($id > 0 && isset($source['embedding_text_hash']) && isset($source['embedding'])) {
+                    $existingHashes[$id] = $source['embedding_text_hash'];
+                    $existingEmbeddings[$id] = $source['embedding'];
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('[VectorSearch] Hash check failed, generating all embeddings: ' . $e->getMessage());
+        }
+
+        // Check which texts actually need embedding
+        $textsToEmbed = [];
+        $embedIndexMap = []; // maps index in $textsToEmbed to index in $batch
+        $embeddings = [];
+        $skippedCount = 0;
+
+        foreach ($batch as $i => $item) {
+            $entityId = (int)$item['entity_id'];
+            $hash = $hashes[$i];
+            if (isset($existingHashes[$entityId]) && $existingHashes[$entityId] === $hash) {
+                $embeddings[$i] = $existingEmbeddings[$entityId];
+                $skippedCount++;
+            } else {
+                $textsToEmbed[] = $texts[$i];
+                $embedIndexMap[count($textsToEmbed) - 1] = $i;
+            }
+        }
+
+        if (!empty($textsToEmbed)) {
+            try {
+                $newEmbeddings = $this->embeddingClient->embed($textsToEmbed, 'passage');
+                foreach ($newEmbeddings as $newI => $emb) {
+                    $origI = $embedIndexMap[$newI];
+                    $embeddings[$origI] = $emb;
+                }
+            } catch (\RuntimeException $e) {
+                $this->logger->error('[VectorSearch] Batch embedding failed: ' . $e->getMessage());
+                throw $e;
+            }
+        }
+
+        if ($skippedCount > 0) {
+            $this->logger->info("[VectorSearch] Reused {$skippedCount} existing embeddings from OpenSearch (hash matched).");
         }
 
         $weightedAttrCodes = array_keys($this->weightProvider->getWeightedAttributes());
@@ -262,15 +320,16 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
             $docs[] = array_merge(
                 [
-                    'entity_id'    => $entityId,
-                    'sku'          => (string)($productData['sku'] ?? ''),
-                    'store_id'     => $storeId,
-                    'category_ids' => array_map('intval', $categoryIds),
-                    'name'         => $this->stemmer->stemText($this->docFieldToString($doc['name'] ?? $productData['name'] ?? '')),
-                    'description'  => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
-                    'status'       => (int)($productData['status'] ?? 1),
-                    'visibility'   => (int)($productData['visibility'] ?? 4),
-                    'embedding'    => $embeddings[$i],
+                    'entity_id'           => $entityId,
+                    'sku'                 => (string)($productData['sku'] ?? ''),
+                    'store_id'            => $storeId,
+                    'category_ids'        => array_map('intval', $categoryIds),
+                    'name'                => $this->stemmer->stemText($this->docFieldToString($doc['name'] ?? $productData['name'] ?? '')),
+                    'description'         => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
+                    'status'              => (int)($productData['status'] ?? 1),
+                    'visibility'          => (int)($productData['visibility'] ?? 4),
+                    'embedding_text_hash' => $hashes[$i],
+                    'embedding'           => $embeddings[$i],
                 ],
                 $perAttrFields
             );
@@ -279,6 +338,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
         $this->openSearchClient->bulk($docs);
         $this->logger->info('[VectorSearch] Indexed ' . count($docs) . " products for store {$storeId}.");
     }
+
 
     // -------------------------------------------------------------------------
     // Helpers
@@ -384,18 +444,44 @@ class ProductVector implements ActionInterface, MviewActionInterface
      */
     private function buildChildrenMap(array $products): array
     {
-        $map = [];
+        $parentIds = [];
         foreach ($products as $productData) {
-            $childIds = $this->dataProvider->getProductChildIds(
-                $productData['entity_id'],
-                $productData['type_id']
-            );
-            if (!empty($childIds)) {
-                $map[(int)$productData['entity_id']] = array_map('intval', $childIds);
+            $parentIds[] = (int)$productData['entity_id'];
+        }
+
+        if (empty($parentIds)) {
+            return [];
+        }
+
+        $map = [];
+        try {
+            $conn = $this->resource->getConnection();
+            $select = $conn->select()
+                ->from($conn->getTableName('catalog_product_relation'), ['parent_id', 'child_id'])
+                ->where('parent_id IN (?)', $parentIds);
+
+            $rows = $conn->fetchAll($select);
+            foreach ($rows as $row) {
+                $parentId = (int)$row['parent_id'];
+                $childId = (int)$row['child_id'];
+                $map[$parentId][] = $childId;
+            }
+        } catch (\Throwable $e) {
+            $this->logger->error('[VectorSearch] Error bulk loading child IDs: ' . $e->getMessage());
+            // Fallback to native one-by-one method if DB query fails
+            foreach ($products as $productData) {
+                $childIds = $this->dataProvider->getProductChildIds(
+                    $productData['entity_id'],
+                    $productData['type_id']
+                );
+                if (!empty($childIds)) {
+                    $map[(int)$productData['entity_id']] = array_map('intval', $childIds);
+                }
             }
         }
         return $map;
     }
+
 
     /**
      * Safely converts a document field value to a trimmed string.

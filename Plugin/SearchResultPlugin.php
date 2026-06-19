@@ -39,7 +39,8 @@ class SearchResultPlugin
         private readonly CacheInterface        $cache,
         private readonly LoggerInterface       $logger,
         private readonly DocumentFactory       $documentFactory,
-        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState
+        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState,
+        private readonly \Kkkonrad\VectorSearch\Model\Config $config
     ) {}
 
     /**
@@ -100,7 +101,7 @@ class SearchResultPlugin
         $params = $this->request->getParams();
         $excluded = [
             'q', 'p', 'product_list_order', 'product_list_dir', 
-            'product_list_limit', 'product_list_mode', 'id', 'ajax'
+            'product_list_limit', 'product_list_mode', 'id', 'ajax', 'price'
         ];
         $filters = [];
         foreach ($params as $field => $value) {
@@ -154,8 +155,14 @@ class SearchResultPlugin
             return self::$processCache[$cacheKey] = [];
         }
 
-        // Query up to 100 results to support pagination
-        $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 100, $storeId, $criteriaFilters);
+        // Query up to configured limit to support pagination
+        $ids = $this->openSearchClient->hybridSearch(
+            $queryText,
+            $vector,
+            $this->config->getOpenSearchSearchLimit(),
+            $storeId,
+            $criteriaFilters
+        );
 
         self::$processCache[$cacheKey] = $ids;
         if ($cacheEnabled) {
