@@ -40,7 +40,27 @@ class Config
 
     public function getOpenSearchIndexName(): string
     {
-        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_INDEX_NAME);
+        $indexName = (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_INDEX_NAME);
+        if ($indexName === '') {
+            return '';
+        }
+        $prefix = $this->getSearchIndexPrefix();
+        if ($prefix !== '') {
+            return $prefix . '_' . $indexName;
+        }
+        return $indexName;
+    }
+
+    private function getSearchIndexPrefix(): string
+    {
+        $engine = (string)$this->scopeConfig->getValue('catalog/search/engine');
+        if ($engine !== '') {
+            $prefix = (string)$this->scopeConfig->getValue("catalog/search/{$engine}_index_prefix");
+            if ($prefix !== '') {
+                return $prefix;
+            }
+        }
+        return (string)$this->scopeConfig->getValue('catalog/search/elasticsearch_index_prefix');
     }
 
     public function getOpenSearchUsername(): string
