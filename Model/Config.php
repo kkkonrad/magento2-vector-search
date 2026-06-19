@@ -7,11 +7,15 @@ use Magento\Framework\App\Config\ScopeConfigInterface;
 
 class Config
 {
-    private const XML_EMBEDDING_SERVICE_URL = 'vectorsearch/embedding/service_url';
+    private const XML_OPENSEARCH_EMBEDDING_SERVICE_URL = 'vectorsearch/embedding/service_url';
     private const XML_OPENSEARCH_INDEX_NAME = 'vectorsearch/opensearch/index_name';
     private const XML_OPENSEARCH_SEARCH_TYPE = 'vectorsearch/opensearch/search_type';
 
     private const XML_OPENSEARCH_MIN_SIMILARITY = 'vectorsearch/opensearch/min_similarity';
+
+    private const XML_OPENSEARCH_COMBINATION_TECHNIQUE = 'vectorsearch/opensearch/hybrid_combination_technique';
+    private const XML_OPENSEARCH_LEXICAL_WEIGHT = 'vectorsearch/opensearch/lexical_weight';
+    private const XML_OPENSEARCH_KNN_WEIGHT = 'vectorsearch/opensearch/knn_weight';
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig
@@ -20,9 +24,26 @@ class Config
     public function getEmbeddingServiceUrl(): string
     {
         return rtrim(
-            (string)$this->scopeConfig->getValue(self::XML_EMBEDDING_SERVICE_URL),
+            (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_EMBEDDING_SERVICE_URL),
             '/'
         );
+    }
+
+    public function getOpenSearchCombinationTechnique(): string
+    {
+        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_COMBINATION_TECHNIQUE) ?: 'rrf';
+    }
+
+    public function getOpenSearchLexicalWeight(): float
+    {
+        $val = $this->scopeConfig->getValue(self::XML_OPENSEARCH_LEXICAL_WEIGHT);
+        return $val !== null && $val !== '' ? (float)$val : 0.7;
+    }
+
+    public function getOpenSearchKnnWeight(): float
+    {
+        $val = $this->scopeConfig->getValue(self::XML_OPENSEARCH_KNN_WEIGHT);
+        return $val !== null && $val !== '' ? (float)$val : 0.3;
     }
 
     public function getOpenSearchHost(): string

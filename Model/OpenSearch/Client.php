@@ -96,12 +96,44 @@ class Client
         $useRrf  = $this->supportsRrf();
 
         if ($useRrf) {
-            // Native RRF — available since OpenSearch 2.16
-            $normalizationProcessor = [
-                'normalization' => ['technique' => 'rrf'],
-                'combination'   => ['technique' => 'rrf'],
-            ];
-            $this->logger->info("[VectorSearch] OpenSearch {$version}: using native RRF pipeline.");
+            $technique = $this->config->getOpenSearchCombinationTechnique();
+            if ($technique === 'arithmetic_mean') {
+                $lexicalWeight = $this->config->getOpenSearchLexicalWeight();
+                $knnWeight     = $this->config->getOpenSearchKnnWeight();
+                // Ensure weights sum up to exactly 1.0
+                $sum = $lexicalWeight + $knnWeight;
+                if ($sum > 0.0) {
+                    $lexicalWeight /= $sum;
+                    $knnWeight     /= $sum;
+                } else {
+                    $lexicalWeight = 0.7;
+                    $knnWeight     = 0.3;
+                }
+
+                $normalizationProcessor = [
+                    'normalization' => ['technique' => 'min_max'],
+                    'combination'   => [
+                        'technique'  => 'arithmetic_mean',
+                        'parameters' => [
+                            'weights' => [
+                                round($lexicalWeight, 4),
+                                round($knnWeight, 4)
+                            ]
+                        ]
+                    ],
+                ];
+                $this->logger->info(
+                    "[VectorSearch] OpenSearch {$version}: using Arithmetic Mean pipeline with weights "
+                    . "[lexical: {$lexicalWeight}, knn: {$knnWeight}]."
+                );
+            } else {
+                // Native RRF
+                $normalizationProcessor = [
+                    'normalization' => ['technique' => 'rrf'],
+                    'combination'   => ['technique' => 'rrf'],
+                ];
+                $this->logger->info("[VectorSearch] OpenSearch {$version}: using native RRF pipeline.");
+            }
         } else {
             // Fallback for < 2.16: l2 normalisation + harmonic mean
             // Better than min_max+arithmetic_mean for cosine-similarity embeddings.

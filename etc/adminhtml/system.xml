@@ -30,6 +30,27 @@
                     <comment>Wybierz czy chcesz używać wyszukiwania hybrydowego, czy czystego kNN (semantycznego)</comment>
                     <source_model>Kkkonrad\VectorSearch\Model\Config\Source\SearchType</source_model>
                 </field>
+                <field id="hybrid_combination_technique" translate="label comment" type="select" sortOrder="36" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Metoda łączenia w wyszukiwaniu hybrydowym</label>
+                    <comment>Wybierz metodę łączenia wyników leksykalnych i semantycznych. RRF jest oparty na pozycjach, a Średnia Arytmetyczna łączy wyniki punktowe.</comment>
+                    <source_model>Kkkonrad\VectorSearch\Model\Config\Source\CombinationTechnique</source_model>
+                </field>
+                <field id="lexical_weight" translate="label comment" type="text" sortOrder="37" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Waga wyszukiwania tekstowego (leksykalnego)</label>
+                    <comment>Wartość od 0.0 do 1.0 (np. 0.7). Suma wag tekstowego i wektorowego musi wynosić dokładnie 1.0.</comment>
+                    <validate>validate-number required-entry</validate>
+                    <depends>
+                        <field id="hybrid_combination_technique">arithmetic_mean</field>
+                    </depends>
+                </field>
+                <field id="knn_weight" translate="label comment" type="text" sortOrder="38" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Waga wyszukiwania wektorowego (semantycznego)</label>
+                    <comment>Wartość od 0.0 do 1.0 (np. 0.3). Suma wag tekstowego i wektorowego musi wynosić dokładnie 1.0.</comment>
+                    <validate>validate-number required-entry</validate>
+                    <depends>
+                        <field id="hybrid_combination_technique">arithmetic_mean</field>
+                    </depends>
+                </field>
                 <field id="min_similarity" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Minimalne podobieństwo wektorowe</label>
                     <comment>Próg podobieństwa cosinusowego dla wyszukiwania kNN (wartość od 0 do 1, zalecana: 0.90). Wyszukiwanie odrzuci wyniki poniżej tego progu.</comment>
