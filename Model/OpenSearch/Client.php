@@ -89,13 +89,6 @@ class Client
 
     public function ensurePipeline(): void
     {
-        // Check if pipeline already exists
-        $check = $this->request('GET', '/_search/pipeline/' . self::PIPELINE_ID, [], false);
-        if (isset($check[self::PIPELINE_ID])) {
-            $this->logger->info('[VectorSearch] Pipeline "' . self::PIPELINE_ID . '" already exists.');
-            return;
-        }
-
         $version = $this->getVersion();
         $useRrf  = $this->supportsRrf();
 
@@ -192,7 +185,7 @@ class Client
                         'visibility'  => ['type' => 'integer'],
                         'embedding'   => [
                             'type'      => 'knn_vector',
-                            'dimension' => 768,
+                            'dimension' => 384,
                             'method'    => [
                                 // lucene supports kNN filters natively (required for hybrid/RRF).
                                 // nmslib does NOT support the 'filter' parameter and causes a 400

@@ -57,7 +57,6 @@ class ProductVector implements ActionInterface, MviewActionInterface
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
         $this->openSearchClient->ensureIndex();
-        $this->openSearchClient->ensurePipeline();
 
         foreach ($this->storeManager->getStores() as $store) {
             $storeId = (int)$store->getId();

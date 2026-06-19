@@ -11,7 +11,23 @@
         POST request, causing the embedding service to receive DELETE instead of POST
         and return an HTML error page instead of JSON embeddings.
     -->
+    <virtualType name="Kkkonrad\VectorSearch\Model\EmbeddingCurl"
+                 type="Magento\Framework\HTTP\Client\Curl"/>
 
+    <virtualType name="Kkkonrad\VectorSearch\Model\OpenSearchCurl"
+                 type="Magento\Framework\HTTP\Client\Curl"/>
+
+    <type name="Kkkonrad\VectorSearch\Model\EmbeddingClient">
+        <arguments>
+            <argument name="curl" xsi:type="object">Kkkonrad\VectorSearch\Model\EmbeddingCurl</argument>
+        </arguments>
+    </type>
+
+    <type name="Kkkonrad\VectorSearch\Model\OpenSearch\Client">
+        <arguments>
+            <argument name="curl" xsi:type="object">Kkkonrad\VectorSearch\Model\OpenSearchCurl</argument>
+        </arguments>
+    </type>
 
     <!-- Plugin on CatalogSearch collection to rerank results by vector similarity -->
     <type name="Magento\CatalogSearch\Model\ResourceModel\Fulltext\Collection">
@@ -27,6 +43,18 @@
                 sortOrder="10"/>
     </type>
 
-
+    <!-- Register CLI commands -->
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="vectorsearch_setup" xsi:type="object">
+                    Kkkonrad\VectorSearch\Console\Command\SetupCommand
+                </item>
+                <item name="vectorsearch_reindex" xsi:type="object">
+                    Kkkonrad\VectorSearch\Console\Command\ReindexCommand
+                </item>
+            </argument>
+        </arguments>
+    </type>
 
 </config>
