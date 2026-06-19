@@ -13,6 +13,7 @@ use Kkkonrad\VectorSearch\Model\EmbeddingClient;
 use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
 use Magento\Framework\App\ResourceConnection;
+use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
 
 /**
  * Vector search product indexer.
@@ -46,7 +47,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         private readonly StoreManagerInterface   $storeManager,
         private readonly LoggerInterface         $logger,
         private readonly AttributeWeightProvider $weightProvider,
-        private readonly ResourceConnection     $resource
+        private readonly ResourceConnection     $resource,
+        private readonly PolishStemmer           $stemmer
     ) {}
 
     // -------------------------------------------------------------------------
@@ -242,7 +244,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
                 if (isset($doc[$valueKey])) {
                     $str = $this->docFieldToString($doc[$valueKey]);
                     if ($str !== '') {
-                        $perAttrFields[AttributeWeightProvider::fieldName($code)] = $str;
+                        $perAttrFields[AttributeWeightProvider::fieldName($code)] = $this->stemmer->stemText($str);
                     }
                 }
             }
@@ -252,8 +254,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
                     'entity_id'   => $entityId,
                     'sku'         => (string)($productData['sku'] ?? ''),
                     'store_id'    => $storeId,
-                    'name'        => $this->docFieldToString($doc['name'] ?? $productData['name'] ?? ''),
-                    'description' => $this->getDocumentDescription($doc, $categoryNames),
+                    'name'        => $this->stemmer->stemText($this->docFieldToString($doc['name'] ?? $productData['name'] ?? '')),
+                    'description' => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
                     'status'      => (int)($productData['status'] ?? 1),
                     'visibility'  => (int)($productData['visibility'] ?? 4),
                     'embedding'   => $embeddings[$i],

@@ -7,6 +7,7 @@ use Magento\Framework\HTTP\Client\Curl;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
+use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
 
 /**
  * Lightweight OpenSearch HTTP client (no SDK dependency).
@@ -23,7 +24,8 @@ class Client
     public function __construct(
         private readonly Config                  $config,
         private readonly LoggerInterface         $logger,
-        private readonly AttributeWeightProvider $weightProvider
+        private readonly AttributeWeightProvider $weightProvider,
+        private readonly PolishStemmer           $stemmer
     ) {}
 
     public function __destruct()
@@ -317,10 +319,10 @@ class Client
                     'must_not' => [
                         'bool' => [
                             'must' => [
-                                ['match_phrase' => ['description' => 'Kobiety']]
+                                ['match_phrase' => ['description' => $this->stemmer->stem('Kobiety')]]
                             ],
                             'must_not' => [
-                                ['match_phrase' => ['description' => 'Mężczyźni']]
+                                ['match_phrase' => ['description' => $this->stemmer->stem('Mężczyźni')]]
                             ]
                         ]
                     ]
@@ -332,10 +334,10 @@ class Client
                     'must_not' => [
                         'bool' => [
                             'must' => [
-                                ['match_phrase' => ['description' => 'Mężczyźni']]
+                                ['match_phrase' => ['description' => $this->stemmer->stem('Mężczyźni')]]
                             ],
                             'must_not' => [
-                                ['match_phrase' => ['description' => 'Kobiety']]
+                                ['match_phrase' => ['description' => $this->stemmer->stem('Kobiety')]]
                             ]
                         ]
                     ]
@@ -356,10 +358,12 @@ class Client
             $fields[] = AttributeWeightProvider::fieldName($code) . '^' . $weight;
         }
 
+        $stemmedQuery = $this->stemmer->stemText($queryText);
+
         $shouldClauses = [
             [
                 'multi_match' => [
-                    'query'    => $queryText,
+                    'query'    => $stemmedQuery,
                     'fields'   => $fields,
                     'type'     => 'best_fields',
                     'operator' => 'or',
@@ -371,14 +375,14 @@ class Client
         if ($isMale && !$isFemale) {
             $shouldClauses[] = [
                 'multi_match' => [
-                    'query'  => 'Mężczyźni',
+                    'query'  => $this->stemmer->stem('Mężczyźni'),
                     'fields' => ['description^5', 'attr_gender^10'],
                 ]
             ];
         } elseif ($isFemale && !$isMale) {
             $shouldClauses[] = [
                 'multi_match' => [
-                    'query'  => 'Kobiety',
+                    'query'  => $this->stemmer->stem('Kobiety'),
                     'fields' => ['description^5', 'attr_gender^10'],
                 ]
             ];
