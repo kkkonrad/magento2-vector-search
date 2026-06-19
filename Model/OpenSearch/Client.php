@@ -163,6 +163,9 @@ class Client
             $attrProperties[$fieldName] = ['type' => 'text', 'analyzer' => 'polish_asciifolding'];
         }
 
+        $isHybrid = $this->config->getOpenSearchSearchType() === 'hybrid';
+        $engine   = $isHybrid ? 'lucene' : 'nmslib';
+
         $mapping = [
             'settings' => [
                 'index' => [
@@ -197,12 +200,9 @@ class Client
                             'type'      => 'knn_vector',
                             'dimension' => 384,
                             'method'    => [
-                                // lucene supports kNN filters natively (required for hybrid/RRF).
-                                // nmslib does NOT support the 'filter' parameter and causes a 400
-                                // error on every hybrid query, falling back to a slow full scan.
                                 'name'       => 'hnsw',
                                 'space_type' => 'cosinesimil',
-                                'engine'     => 'lucene',
+                                'engine'     => $engine,
                                 'parameters' => [
                                     'ef_construction' => 128,
                                     'm'               => 16,
@@ -385,18 +385,24 @@ class Client
         }
 
         $searchType = $this->config->getOpenSearchSearchType();
-        if ($searchType === 'knn') {
+        if ($searchType === 'pure_knn' || $searchType === 'knn') {
             // Pure kNN semantic search (ignores lexical shouldClauses)
+            // Since nmslib does not support the 'filter' parameter inside the 'knn' clause,
+            // we must use a bool query with post-filtering.
             $query = [
                 'size'    => $size,
                 '_source' => ['entity_id'],
                 'query'   => [
-                    'knn' => [
-                        'embedding' => [
-                            'vector' => $vector,
-                            'k'      => $size,
-                            'filter' => ['bool' => ['filter' => $filters]],
+                    'bool' => [
+                        'must' => [
+                            'knn' => [
+                                'embedding' => [
+                                    'vector' => $vector,
+                                    'k'      => $size,
+                                ],
+                            ],
                         ],
+                        'filter' => $filters,
                     ],
                 ],
             ];

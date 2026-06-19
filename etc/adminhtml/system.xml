@@ -19,15 +19,7 @@
             </group>
             <group id="opensearch" translate="label" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
                 <label>OpenSearch</label>
-                <field id="host" translate="label comment" type="text" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Host</label>
-                    <comment>Hostname lub IP serwera OpenSearch</comment>
-                    <validate>required-entry</validate>
-                </field>
-                <field id="port" translate="label comment" type="text" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Port</label>
-                    <validate>required-entry validate-digits</validate>
-                </field>
+
                 <field id="index_name" translate="label comment" type="text" sortOrder="30" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Nazwa indeksu</label>
                     <comment>Nazwa indeksu kNN w OpenSearch</comment>
@@ -37,14 +29,6 @@
                     <label>Typ wyszukiwania</label>
                     <comment>Wybierz czy chcesz używać wyszukiwania hybrydowego, czy czystego kNN (semantycznego)</comment>
                     <source_model>Kkkonrad\VectorSearch\Model\Config\Source\SearchType</source_model>
-                </field>
-                <field id="username" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Username</label>
-                    <comment>Opcjonalnie — jeśli OpenSearch ma włączone Basic Auth</comment>
-                </field>
-                <field id="password" translate="label comment" type="password" sortOrder="50" showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Password</label>
-                    <backend_model>Magento\Config\Model\Config\Backend\Encrypted</backend_model>
                 </field>
             </group>
         </section>

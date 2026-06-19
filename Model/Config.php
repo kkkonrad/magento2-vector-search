@@ -4,21 +4,15 @@ declare(strict_types=1);
 namespace Kkkonrad\VectorSearch\Model;
 
 use Magento\Framework\App\Config\ScopeConfigInterface;
-use Magento\Framework\Encryption\EncryptorInterface;
 
 class Config
 {
     private const XML_EMBEDDING_SERVICE_URL = 'vectorsearch/embedding/service_url';
-    private const XML_OPENSEARCH_HOST       = 'vectorsearch/opensearch/host';
-    private const XML_OPENSEARCH_PORT       = 'vectorsearch/opensearch/port';
     private const XML_OPENSEARCH_INDEX_NAME = 'vectorsearch/opensearch/index_name';
-    private const XML_OPENSEARCH_USERNAME   = 'vectorsearch/opensearch/username';
-    private const XML_OPENSEARCH_PASSWORD   = 'vectorsearch/opensearch/password';
     private const XML_OPENSEARCH_SEARCH_TYPE = 'vectorsearch/opensearch/search_type';
 
     public function __construct(
-        private readonly ScopeConfigInterface $scopeConfig,
-        private readonly EncryptorInterface   $encryptor
+        private readonly ScopeConfigInterface $scopeConfig
     ) {}
 
     public function getEmbeddingServiceUrl(): string
@@ -31,12 +25,26 @@ class Config
 
     public function getOpenSearchHost(): string
     {
-        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_HOST);
+        $engine = (string)$this->scopeConfig->getValue('catalog/search/engine');
+        if ($engine !== '') {
+            $host = (string)$this->scopeConfig->getValue("catalog/search/{$engine}_server_hostname");
+            if ($host !== '') {
+                return $host;
+            }
+        }
+        return 'localhost';
     }
 
     public function getOpenSearchPort(): string
     {
-        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_PORT);
+        $engine = (string)$this->scopeConfig->getValue('catalog/search/engine');
+        if ($engine !== '') {
+            $port = (string)$this->scopeConfig->getValue("catalog/search/{$engine}_server_port");
+            if ($port !== '') {
+                return $port;
+            }
+        }
+        return '9200';
     }
 
     public function getOpenSearchIndexName(): string
@@ -66,13 +74,26 @@ class Config
 
     public function getOpenSearchUsername(): string
     {
-        return (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_USERNAME);
+        $engine = (string)$this->scopeConfig->getValue('catalog/search/engine');
+        if ($engine !== '') {
+            $authEnabled = $this->scopeConfig->isSetFlag("catalog/search/{$engine}_enable_auth");
+            if ($authEnabled) {
+                return (string)$this->scopeConfig->getValue("catalog/search/{$engine}_username");
+            }
+        }
+        return '';
     }
 
     public function getOpenSearchPassword(): string
     {
-        $encrypted = (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_PASSWORD);
-        return $encrypted ? $this->encryptor->decrypt($encrypted) : '';
+        $engine = (string)$this->scopeConfig->getValue('catalog/search/engine');
+        if ($engine !== '') {
+            $authEnabled = $this->scopeConfig->isSetFlag("catalog/search/{$engine}_enable_auth");
+            if ($authEnabled) {
+                return (string)$this->scopeConfig->getValue("catalog/search/{$engine}_password");
+            }
+        }
+        return '';
     }
 
     public function getOpenSearchSearchType(): string
