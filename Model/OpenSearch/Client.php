@@ -257,6 +257,7 @@ class Client
                         'status'              => ['type' => 'integer'],
                         'visibility'          => ['type' => 'integer'],
                         'embedding_text_hash' => ['type' => 'keyword'],
+                        'embedding_text'      => ['type' => 'text', 'index' => false],
                         'embedding'           => [
                             'type'      => 'knn_vector',
                             'dimension' => $this->embeddingClient->getDimension(),
@@ -499,13 +500,15 @@ class Client
         $minScore = 1.0 / (2.0 - $minSimilarity);
 
         $searchType = $this->config->getOpenSearchSearchType();
+        $sourceFields = $this->config->isRerankingEnabled() ? ['entity_id', 'embedding_text'] : ['entity_id'];
+
         if ($searchType === 'pure_knn' || $searchType === 'knn') {
             // Pure kNN semantic search (ignores lexical shouldClauses)
             // Since nmslib does not support the 'filter' parameter inside the 'knn' clause,
             // we must use a bool query with post-filtering.
             $query = [
                 'size'    => $size,
-                '_source' => ['entity_id'],
+                '_source' => $sourceFields,
                 'query'   => [
                     'bool' => [
                         'must' => [
@@ -526,7 +529,7 @@ class Client
             // multi_match boosts exact attribute matches (color, material, style…).
             $query = [
                 'size'    => $size,
-                '_source' => ['entity_id'],
+                '_source' => $sourceFields,
                 'query'   => [
                     'hybrid' => [
                         'queries' => [
@@ -561,10 +564,41 @@ class Client
             );
         }
 
-        return array_map(
+        $entityIds = array_map(
             static fn(array $hit): int => (int)$hit['_source']['entity_id'],
             $hits
         );
+
+        if ($this->config->isRerankingEnabled() && !empty($hits)) {
+            $rerankLimit = $this->config->getRerankingLimit();
+            $candidatesToRerank = array_slice($hits, 0, $rerankLimit);
+            $remainingHits = array_slice($hits, $rerankLimit);
+
+            $documents = [];
+            foreach ($candidatesToRerank as $hit) {
+                $src = $hit['_source'] ?? [];
+                $documents[] = [
+                    'id' => (int)($src['entity_id'] ?? 0),
+                    'text' => mb_substr((string)($src['embedding_text'] ?? ''), 0, 300)
+                ];
+            }
+
+            try {
+                $ranked = $this->embeddingClient->rerank($queryText, $documents);
+                if (!empty($ranked)) {
+                    $rerankedIds = array_column($ranked, 'id');
+                    $remainingIds = array_map(
+                        static fn(array $hit): int => (int)$hit['_source']['entity_id'],
+                        $remainingHits
+                    );
+                    return array_values(array_unique(array_merge($rerankedIds, $remainingIds)));
+                }
+            } catch (\Throwable $e) {
+                $this->logger->error('[VectorSearch] Reranking failed during search, falling back to OpenSearch order: ' . $e->getMessage());
+            }
+        }
+
+        return $entityIds;
     }
 
     public function deleteProduct(int $entityId): void

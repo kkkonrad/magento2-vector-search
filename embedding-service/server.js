@@ -1,8 +1,9 @@
-import { pipeline } from '@xenova/transformers';
+import { pipeline, AutoTokenizer, AutoModelForSequenceClassification } from '@xenova/transformers';
 import express from 'express';
 
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-small';
+const RERANKER_MODEL = process.env.RERANKER_MODEL || 'Xenova/ms-marco-TinyBERT-L-2-v2';
 const MAX_BATCH_SIZE = parseInt(process.env.MAX_BATCH_SIZE || '64', 10);
 
 const app = express();
@@ -10,6 +11,8 @@ app.use(express.json({ limit: '10mb' }));
 
 let embedder = null;
 let dimension = 384; // default fallback
+let rerankerModel = null;
+let rerankerTokenizer = null;
 
 // ─── Priority queue ───────────────────────────────────────────────────────────
 //
@@ -68,6 +71,21 @@ async function loadModel() {
     } catch (err) {
         console.error('[embedding-service] Error detecting dimension, using fallback:', err.message);
     }
+}
+
+async function loadReranker() {
+    console.log(`[embedding-service] Loading reranker model ${RERANKER_MODEL}...`);
+    rerankerModel = await AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL, {
+        cache_dir: './models',
+        session_options: {
+            intraOpNumThreads: 4,
+            interOpNumThreads: 4,
+        }
+    });
+    rerankerTokenizer = await AutoTokenizer.from_pretrained(RERANKER_MODEL, {
+        cache_dir: './models',
+    });
+    console.log(`[embedding-service] Reranker model ${RERANKER_MODEL} ready.`);
 }
 
 // ─── Core inference ──────────────────────────────────────────────────────────
@@ -147,6 +165,59 @@ app.post('/embed', async (req, res) => {
     }
 });
 
+/**
+ * POST /rerank
+ * Body: { query: string, documents: { id: number, text: string }[] }
+ */
+app.post('/rerank', async (req, res) => {
+    if (!rerankerModel || !rerankerTokenizer) {
+        return res.status(503).json({ error: 'Reranker model not loaded yet, retry in a moment.' });
+    }
+
+    const { query, documents } = req.body;
+    if (!query || typeof query !== 'string') {
+        return res.status(400).json({ error: 'query must be a non-empty string.' });
+    }
+    if (!Array.isArray(documents) || documents.length === 0) {
+        return res.status(400).json({ error: 'documents must be a non-empty array of objects.' });
+    }
+
+    try {
+        const start = Date.now();
+        const queries = Array(documents.length).fill(query);
+        const docs = documents.map(d => String(d.text || ''));
+
+        const inputs = rerankerTokenizer(queries, {
+            text_pair: docs,
+            padding: true,
+            truncation: true,
+        });
+
+        const output = await rerankerModel(inputs);
+        const logits = output.logits.data; // Flat array of scores
+
+        const results = documents.map((doc, idx) => ({
+            id: doc.id,
+            score: parseFloat(logits[idx])
+        }));
+
+        // Sort descending by score
+        results.sort((a, b) => b.score - a.score);
+
+        const elapsed = Date.now() - start;
+        console.log(`[embedding-service] Reranked ${documents.length} documents in ${elapsed} ms.`);
+
+        return res.json({
+            ranked: results,
+            model: RERANKER_MODEL,
+            time_ms: elapsed
+        });
+    } catch (err) {
+        console.error('[embedding-service] Rerank error:', err);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 /** GET /health */
 app.get('/health', (_req, res) => {
     res.json({
@@ -161,16 +232,16 @@ app.get('/health', (_req, res) => {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
-loadModel()
+Promise.all([loadModel(), loadReranker()])
     .then(() => {
         app.listen(PORT, () => {
             console.log(
                 `[embedding-service] Listening on http://localhost:${PORT}` +
-                `  model=${MODEL}  batchSize=${MAX_BATCH_SIZE}`
+                `  model=${MODEL}  reranker=${RERANKER_MODEL}  batchSize=${MAX_BATCH_SIZE}`
             );
         });
     })
     .catch((err) => {
-        console.error('[embedding-service] Failed to load model:', err);
+        console.error('[embedding-service] Failed to load models:', err);
         process.exit(1);
     });

@@ -349,6 +349,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
                     'visibility'          => (int)($productData['visibility'] ?? 4),
                     'embedding_text_hash' => $hashes[$i],
                     'embedding'           => $embeddings[$i],
+                    'embedding_text'      => $this->buildEmbeddingText($doc, $productData, $categoryNames),
                 ],
                 $perAttrFields
             );

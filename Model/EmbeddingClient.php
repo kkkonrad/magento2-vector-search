@@ -166,4 +166,52 @@ class EmbeddingClient
         }
         return 'unknown';
     }
+
+    /**
+     * Rerank a set of documents using the Cross-Encoder model.
+     *
+     * @param string $query
+     * @param array[] $documents  Each document is ['id' => int, 'text' => string]
+     * @return array[]            List of ['id' => int, 'score' => float] sorted descending by score
+     */
+    public function rerank(string $query, array $documents): array
+    {
+        if (empty($documents)) {
+            return [];
+        }
+
+        $payload = json_encode([
+            'query' => $query,
+            'documents' => $documents
+        ], JSON_UNESCAPED_UNICODE);
+
+        $url = $this->config->getEmbeddingServiceUrl() . '/rerank';
+
+        $ch = $this->getCurlHandle();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        // Cross-encoder is slow on CPU, so we allow slightly longer timeout if needed, but keep it responsive
+        curl_setopt($ch, CURLOPT_TIMEOUT, self::TIMEOUT_SEARCH + 2);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Accept: application/json'
+        ]);
+
+        $body = curl_exec($ch);
+
+        if ($body === false) {
+            $error = curl_error($ch);
+            $this->logger->error('[VectorSearch] Reranking failed: ' . $error);
+            return [];
+        }
+
+        $data = json_decode((string)$body, true);
+        if (!isset($data['ranked']) || !is_array($data['ranked'])) {
+            $this->logger->error('[VectorSearch] Invalid reranking response: ' . $body);
+            return [];
+        }
+
+        return $data['ranked'];
+    }
 }
