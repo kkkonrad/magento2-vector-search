@@ -56,7 +56,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
     public function executeFull(): void
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
-        $this->openSearchClient->ensureIndex();
+        // Full reindex forces a recreation of the index to apply mapping changes
+        $this->openSearchClient->ensureIndex(true);
 
         foreach ($this->storeManager->getStores() as $store) {
             $storeId = (int)$store->getId();
@@ -69,6 +70,9 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
     public function executeList(array $ids): void
     {
+        // Partial reindex: ensure index exists, but do not drop it if it's already there
+        $this->openSearchClient->ensureIndex(false);
+
         foreach ($this->storeManager->getStores() as $store) {
             $this->indexStore((int)$store->getId(), $ids);
         }

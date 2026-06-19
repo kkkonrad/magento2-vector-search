@@ -142,9 +142,19 @@ class Client
     // Index
     // -------------------------------------------------------------------------
 
-    public function ensureIndex(): void
+    public function indexExists(): bool
+    {
+        $response = $this->request('GET', '/' . $this->indexName(), [], false);
+        return isset($response[$this->indexName()]);
+    }
+
+    public function ensureIndex(bool $forceRecreate = false): void
     {
         $this->ensurePipeline();
+
+        if (!$forceRecreate && $this->indexExists()) {
+            return;
+        }
 
         // Build per-attribute field mappings (attr_color, attr_material, …)
         $attrProperties = [];
