@@ -20,20 +20,31 @@ class EmbeddingClient
      */
     private const TIMEOUT_SEARCH = 3;
 
+    private ?\CurlHandle $curlHandle = null;
+
     public function __construct(
-        private readonly Curl            $curl,
         private readonly Config          $config,
         private readonly LoggerInterface $logger
     ) {}
 
-    /**
-     * Generate embeddings for an array of texts.
-     *
-     * @param string[] $texts
-     * @param string   $type  'passage' for indexed docs, 'query' for search queries
-     * @return float[][]
-     * @throws \RuntimeException
-     */
+    public function __destruct()
+    {
+        if ($this->curlHandle !== null) {
+            curl_close($this->curlHandle);
+            $this->curlHandle = null;
+        }
+    }
+
+    private function getCurlHandle(): \CurlHandle
+    {
+        if ($this->curlHandle === null) {
+            $this->curlHandle = curl_init();
+            // HTTP Keep-Alive is enabled by default in native curl as long as the handle is reused.
+            curl_setopt($this->curlHandle, CURLOPT_RETURNTRANSFER, true);
+        }
+        return $this->curlHandle;
+    }
+
     /**
      * Generate embeddings for an array of texts.
      *
@@ -60,19 +71,25 @@ class EmbeddingClient
         );
         $url = $this->config->getEmbeddingServiceUrl() . '/embed';
 
-        $this->curl->setTimeout($timeout);
-        $this->curl->addHeader('Content-Type', 'application/json');
-        $this->curl->addHeader('Accept', 'application/json');
+        $ch = $this->getCurlHandle();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Accept: application/json'
+        ]);
 
-        try {
-            $this->curl->post($url, $payload);
-        } catch (\Exception $e) {
-            $this->logger->error('[VectorSearch] EmbeddingClient error: ' . $e->getMessage());
-            throw new \RuntimeException('Embedding service unavailable: ' . $e->getMessage(), 0, $e);
+        $body = curl_exec($ch);
+
+        if ($body === false) {
+            $error = curl_error($ch);
+            $this->logger->error('[VectorSearch] EmbeddingClient error: ' . $error);
+            throw new \RuntimeException('Embedding service unavailable: ' . $error);
         }
 
-        $body = $this->curl->getBody();
-        $data = json_decode($body, true);
+        $data = json_decode((string)$body, true);
 
         if (!isset($data['embeddings']) || !is_array($data['embeddings'])) {
             $this->logger->error('[VectorSearch] Invalid embedding response: ' . $body);

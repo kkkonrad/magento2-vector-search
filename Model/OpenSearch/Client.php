@@ -18,12 +18,30 @@ class Client
     /** Cached OpenSearch version string, e.g. "2.12.0" */
     private ?string $version = null;
 
+    private ?\CurlHandle $curlHandle = null;
+
     public function __construct(
-        private readonly Curl                    $curl,
         private readonly Config                  $config,
         private readonly LoggerInterface         $logger,
         private readonly AttributeWeightProvider $weightProvider
     ) {}
+
+    public function __destruct()
+    {
+        if ($this->curlHandle !== null) {
+            curl_close($this->curlHandle);
+            $this->curlHandle = null;
+        }
+    }
+
+    private function getCurlHandle(): \CurlHandle
+    {
+        if ($this->curlHandle === null) {
+            $this->curlHandle = curl_init();
+            curl_setopt($this->curlHandle, CURLOPT_RETURNTRANSFER, true);
+        }
+        return $this->curlHandle;
+    }
 
     private function baseUrl(): string
     {
@@ -71,6 +89,13 @@ class Client
 
     public function ensurePipeline(): void
     {
+        // Check if pipeline already exists
+        $check = $this->request('GET', '/_search/pipeline/' . self::PIPELINE_ID, [], false);
+        if (isset($check[self::PIPELINE_ID])) {
+            $this->logger->info('[VectorSearch] Pipeline "' . self::PIPELINE_ID . '" already exists.');
+            return;
+        }
+
         $version = $this->getVersion();
         $useRrf  = $this->supportsRrf();
 
@@ -440,42 +465,51 @@ class Client
         string $contentType = 'application/json',
         bool   $logErrors   = true
     ): array {
-        // Reset all accumulated curl options and headers from previous requests.
-        // Magento's Curl stores CURLOPT_CUSTOMREQUEST etc. in $_curlUserOptions and
-        // $_headers as instance state that is never cleared between makeRequest() calls.
-        // Without this reset, a prior PUT/DELETE would corrupt subsequent POST requests.
-        $this->curl->setOptions([]);
-        $this->curl->setHeaders([]);
+        $ch = $this->getCurlHandle();
+        
+        // Reset specific options from previous requests
+        curl_setopt($ch, CURLOPT_HTTPGET, false);
+        curl_setopt($ch, CURLOPT_POST, false);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, null);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, '');
+        
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
 
-        $this->curl->setTimeout(15);
-        $this->curl->addHeader('Content-Type', $contentType);
-        $this->curl->addHeader('Accept', 'application/json');
+        $headers = [
+            'Content-Type: ' . $contentType,
+            'Accept: application/json'
+        ];
 
         $username = $this->config->getOpenSearchUsername();
         $password = $this->config->getOpenSearchPassword();
         if ($username && $password) {
-            $this->curl->addHeader('Authorization', 'Basic ' . base64_encode("{$username}:{$password}"));
+            $headers[] = 'Authorization: Basic ' . base64_encode("{$username}:{$password}");
         }
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
 
         if ($method === 'POST') {
-            $this->curl->post($url, $body);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
         } elseif ($method === 'PUT') {
-            // Magento Curl::put() does not support a body, so we override via curlUserOptions.
-            // setOptions() sets the entire _curlUserOptions map (replaces, not appends).
-            $this->curl->setOptions([
-                CURLOPT_CUSTOMREQUEST => 'PUT',
-                CURLOPT_POSTFIELDS    => $body,
-            ]);
-            $this->curl->get($url);
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
         } elseif ($method === 'DELETE') {
-            $this->curl->setOptions([CURLOPT_CUSTOMREQUEST => 'DELETE']);
-            $this->curl->get($url);
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
         } else {
-            $this->curl->get($url);
+            curl_setopt($ch, CURLOPT_HTTPGET, true);
         }
 
-        $raw      = $this->curl->getBody();
-        $response = json_decode($raw, true) ?? [];
+        $raw = curl_exec($ch);
+        if ($raw === false) {
+            $error = curl_error($ch);
+            if ($logErrors) {
+                $this->logger->error('[VectorSearch] OpenSearch curl error: ' . $error);
+            }
+            return [];
+        }
+
+        $response = json_decode((string)$raw, true) ?? [];
 
         if ($logErrors && isset($response['error'])) {
             $this->logger->error('[VectorSearch] OpenSearch error: ' . $raw);

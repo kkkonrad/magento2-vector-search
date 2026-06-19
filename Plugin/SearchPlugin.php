@@ -90,9 +90,8 @@ class SearchPlugin
             }
             asort($ranked);
 
-            foreach ($items as $item) {
-                $result->removeItemByKey($item->getId());
-            }
+            $result->removeAllItems();
+
             foreach (array_keys($ranked) as $entityId) {
                 if (isset($items[$entityId])) {
                     $result->addItem($items[$entityId]);

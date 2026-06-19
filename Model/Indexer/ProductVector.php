@@ -57,6 +57,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
         $this->openSearchClient->ensureIndex();
+        $this->openSearchClient->ensurePipeline();
 
         foreach ($this->storeManager->getStores() as $store) {
             $storeId = (int)$store->getId();
@@ -121,7 +122,9 @@ class ProductVector implements ActionInterface, MviewActionInterface
             // Load all EAV attribute values in a single SQL query.
             $productsAttributes = $this->dataProvider->getProductAttributes($storeId, $allIds, $dynamicFields);
 
-            $batch = [];
+            $preparedIndices = [];
+            $validProducts   = [];
+
             foreach ($products as $productData) {
                 $parentId      = (int)$productData['entity_id'];
                 $lastProductId = $parentId;
@@ -145,23 +148,25 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
                 // prepareProductIndex() merges parent+children, resolves option labels,
                 // and returns the same index array that Magento passes to ES.
-                $index = $this->dataProvider->prepareProductIndex($productIndex, $productData, $storeId);
-
-                // ProductDataMapper::map() converts the raw index to a human-readable ES document
-                // with {code}_value fields (e.g. color_value: "Pomarańczowy").
-                $mapped = $this->productDataMapper->map([$parentId => $index], $storeId);
-                $doc    = $mapped[$parentId] ?? [];
-
-                $batch[] = [
-                    'entity_id'   => $parentId,
-                    'product_data' => $productData,
-                    'doc'          => $doc,
-                ];
-
-                $processedIds[] = $parentId;
+                $preparedIndices[$parentId] = $this->dataProvider->prepareProductIndex($productIndex, $productData, $storeId);
+                $validProducts[$parentId]   = $productData;
+                $processedIds[]             = $parentId;
             }
 
-            if (!empty($batch)) {
+            if (!empty($preparedIndices)) {
+                // ProductDataMapper::map() converts the raw indices to human-readable ES documents
+                // with {code}_value fields (e.g. color_value: "Pomarańczowy"). Batch operation is O(1) overhead.
+                $mappedDocs = $this->productDataMapper->map($preparedIndices, $storeId);
+
+                $batch = [];
+                foreach ($validProducts as $parentId => $productData) {
+                    $batch[] = [
+                        'entity_id'    => $parentId,
+                        'product_data' => $productData,
+                        'doc'          => $mappedDocs[$parentId] ?? [],
+                    ];
+                }
+
                 $this->processBatch($batch, $storeId);
             }
 

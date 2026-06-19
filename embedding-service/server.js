@@ -2,7 +2,7 @@ import { pipeline } from '@xenova/transformers';
 import express from 'express';
 
 const PORT = process.env.PORT || 3000;
-const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-base';
+const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-small';
 const MAX_BATCH_SIZE = parseInt(process.env.MAX_BATCH_SIZE || '64', 10);
 
 const app = express();
