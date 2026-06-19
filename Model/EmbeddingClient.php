@@ -11,7 +11,7 @@ class EmbeddingClient
     /**
      * Timeout for bulk reindex calls (many texts, slow is acceptable).
      */
-    private const TIMEOUT_REINDEX = 120;
+    private const TIMEOUT_REINDEX = 600;
 
     /**
      * Timeout for live search queries (1 text).
@@ -108,5 +108,51 @@ class EmbeddingClient
     {
         $result = $this->embed([$text], $type, self::TIMEOUT_SEARCH);
         return $result[0] ?? [];
+    }
+
+    /**
+     * Fetch the active dimension of the loaded embedding model from the service health check.
+     */
+    public function getDimension(): int
+    {
+        try {
+            $ch = curl_init($this->config->getEmbeddingServiceUrl() . '/health');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+            $res = curl_exec($ch);
+            curl_close($ch);
+            if ($res !== false) {
+                $data = json_decode((string)$res, true);
+                if (isset($data['dimension']) && is_numeric($data['dimension'])) {
+                    return (int)$data['dimension'];
+                }
+            }
+        } catch (\Exception $e) {
+            $this->logger->error('[VectorSearch] Error fetching model dimension from embedding service: ' . $e->getMessage());
+        }
+        return 384; // default fallback matching Xenova/multilingual-e5-small
+    }
+
+    /**
+     * Fetch the active model name from the embedding service health check.
+     */
+    public function getModelName(): string
+    {
+        try {
+            $ch = curl_init($this->config->getEmbeddingServiceUrl() . '/health');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+            $res = curl_exec($ch);
+            curl_close($ch);
+            if ($res !== false) {
+                $data = json_decode((string)$res, true);
+                if (isset($data['model'])) {
+                    return (string)$data['model'];
+                }
+            }
+        } catch (\Exception $e) {
+            $this->logger->error('[VectorSearch] Error fetching model name from embedding service: ' . $e->getMessage());
+        }
+        return 'unknown';
     }
 }

@@ -216,8 +216,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         try {
             $embeddings = $this->embeddingClient->embed($texts, 'passage');
         } catch (\RuntimeException $e) {
-            $this->logger->error('[VectorSearch] Skipping batch due to embedding error: ' . $e->getMessage());
-            return;
+            $this->logger->error('[VectorSearch] Batch embedding failed: ' . $e->getMessage());
+            throw $e;
         }
 
         $weightedAttrCodes = array_keys($this->weightProvider->getWeightedAttributes());
@@ -299,41 +299,51 @@ class ProductVector implements ActionInterface, MviewActionInterface
      */
     private function buildEmbeddingText(array $doc, array $productData, array $categoryNames): string
     {
-        $parts = [];
+        $text = '';
 
-        // Name (with configurable variants already merged in by ProductDataMapper).
+        // Name
         $name = $this->docFieldToString($doc['name'] ?? $productData['name'] ?? '');
         if ($name !== '') {
-            $parts[] = $name;
-            $parts[] = $name; // doubled for semantic weight
+            $text .= "Nazwa: " . $name . ". ";
         }
 
-        // Category names (helps model distinguish gender/audience like Men vs Women).
+        // Categories
         if (!empty($categoryNames)) {
-            $parts[] = implode(' ', $categoryNames);
+            $text .= "Kategorie: " . implode(', ', $categoryNames) . ". ";
         }
 
-        // All human-readable attribute values (color_value, material_value, …).
+        // Dynamic EAV attributes
+        $attrs = [];
         foreach ($doc as $key => $value) {
             if (str_ends_with($key, '_value')) {
+                $code = substr($key, 0, -6);
+                $label = ucfirst($code);
+                if ($code === 'color') $label = 'Kolor';
+                elseif ($code === 'material') $label = 'Materiał';
+                elseif ($code === 'size') $label = 'Rozmiar';
+                elseif ($code === 'gender') $label = 'Płeć';
+
                 $str = $this->docFieldToString($value);
                 if ($str !== '') {
-                    $parts[] = $str;
+                    $attrs[] = "$label: $str";
                 }
             }
         }
+        if (!empty($attrs)) {
+            $text .= implode(', ', $attrs) . ". ";
+        }
 
-        // Descriptions.
+        // Descriptions
         $short = strip_tags($this->docFieldToString($doc['short_description'] ?? ''));
         if ($short !== '') {
-            $parts[] = $short;
+            $text .= "Opis skrócony: " . mb_substr($short, 0, 500) . ". ";
         }
         $desc = strip_tags($this->docFieldToString($doc['description'] ?? ''));
         if ($desc !== '') {
-            $parts[] = $desc;
+            $text .= "Opis: " . mb_substr($desc, 0, 1000) . ". ";
         }
 
-        return trim(implode(' ', array_filter($parts)));
+        return trim($text);
     }
 
     /**

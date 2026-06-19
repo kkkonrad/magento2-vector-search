@@ -38,7 +38,8 @@ class SearchResultPlugin
         private readonly StoreManagerInterface $storeManager,
         private readonly CacheInterface        $cache,
         private readonly LoggerInterface       $logger,
-        private readonly DocumentFactory       $documentFactory
+        private readonly DocumentFactory       $documentFactory,
+        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState
     ) {}
 
     /**
@@ -125,7 +126,8 @@ class SearchResultPlugin
     private function getEntityIds(string $queryText, int $storeId, array $criteriaFilters): array
     {
         $filterHash = md5(json_encode($criteriaFilters));
-        $cacheKey   = $storeId . ':' . $queryText . ':' . $filterHash;
+        $modelName  = $this->embeddingClient->getModelName();
+        $cacheKey   = $storeId . ':' . $queryText . ':' . $filterHash . ':' . $modelName;
 
         // Level 1: in-process static cache
         if (array_key_exists($cacheKey, self::$processCache)) {
@@ -133,13 +135,17 @@ class SearchResultPlugin
             return self::$processCache[$cacheKey];
         }
 
+        $cacheEnabled = $this->cacheState->isEnabled(\Kkkonrad\VectorSearch\Model\Cache\Type::TYPE_IDENTIFIER);
+
         // Level 2: Magento persistent cache
         $magentoCacheKey = 'vectorsearch_ids_' . md5($cacheKey);
-        $cached          = $this->cache->load($magentoCacheKey);
-        if ($cached !== false) {
-            $ids = json_decode($cached, true) ?? [];
-            $this->logger->debug('[VectorSearch] Magento-cache hit (SearchResultPlugin) for: ' . $queryText);
-            return self::$processCache[$cacheKey] = $ids;
+        if ($cacheEnabled) {
+            $cached = $this->cache->load($magentoCacheKey);
+            if ($cached !== false) {
+                $ids = json_decode($cached, true) ?? [];
+                $this->logger->debug('[VectorSearch] Magento-cache hit (SearchResultPlugin) for: ' . $queryText);
+                return self::$processCache[$cacheKey] = $ids;
+            }
         }
 
         // Level 3: Live query (embed + hybrid search)
@@ -152,12 +158,14 @@ class SearchResultPlugin
         $ids = $this->openSearchClient->hybridSearch($queryText, $vector, 100, $storeId, $criteriaFilters);
 
         self::$processCache[$cacheKey] = $ids;
-        $this->cache->save(
-            json_encode($ids),
-            $magentoCacheKey,
-            [self::CACHE_TAG],
-            self::CACHE_LIFETIME
-        );
+        if ($cacheEnabled) {
+            $this->cache->save(
+                json_encode($ids),
+                $magentoCacheKey,
+                [\Kkkonrad\VectorSearch\Model\Cache\Type::CACHE_TAG],
+                self::CACHE_LIFETIME
+            );
+        }
 
         return $ids;
     }

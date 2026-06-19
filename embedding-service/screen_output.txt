@@ -1,0 +1,20 @@
+[embedding-service] Loading model Xenova/bge-m3...
+[embedding-service] Model ready. Detected dimension: 1024
+[embedding-service] Listening on http://localhost:3000  model=Xenova/bge-m3  batchSize=64
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -9,6 +9,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 let embedder = null;
+let dimension = 384; // default fallback
 
 // ─── Priority queue ───────────────────────────────────────────────────────────
 //
@@ -59,7 +60,14 @@ async function loadModel() {
             interOpNumThreads: 4,
         }
     });
-    console.log('[embedding-service] Model ready.');
+    // Auto-detect actual vector dimension
+    try {
+        const dummy = await embedBatch(['dummy']);
+        dimension = dummy[0].length;
+        console.log(`[embedding-service] Model ready. Detected dimension: ${dimension}`);
+    } catch (err) {
+        console.error('[embedding-service] Error detecting dimension, using fallback:', err.message);
+    }
 }
 
 // ─── Core inference ──────────────────────────────────────────────────────────
@@ -144,6 +152,7 @@ app.get('/health', (_req, res) => {
     res.json({
         status: embedder ? 'ok' : 'loading',
         model: MODEL,
+        dimension: dimension,
         batchSize: MAX_BATCH_SIZE,
         queued: { high: queues.high.length, normal: queues.normal.length },
         workerBusy: running,

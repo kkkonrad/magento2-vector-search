@@ -25,7 +25,8 @@ class Client
         private readonly Config                  $config,
         private readonly LoggerInterface         $logger,
         private readonly AttributeWeightProvider $weightProvider,
-        private readonly PolishStemmer           $stemmer
+        private readonly PolishStemmer           $stemmer,
+        private readonly \Kkkonrad\VectorSearch\Model\EmbeddingClient $embeddingClient
     ) {}
 
     public function __destruct()
@@ -202,7 +203,7 @@ class Client
                         'visibility'   => ['type' => 'integer'],
                         'embedding'    => [
                             'type'      => 'knn_vector',
-                            'dimension' => 384,
+                            'dimension' => $this->embeddingClient->getDimension(),
                             'method'    => [
                                 'name'       => 'hnsw',
                                 'space_type' => 'cosinesimil',
