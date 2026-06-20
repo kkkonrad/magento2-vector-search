@@ -20,7 +20,6 @@ class Config
     private const XML_OPENSEARCH_SEARCH_LIMIT = 'vectorsearch/opensearch/search_limit';
 
     private const XML_RERANKING_ENABLED = 'vectorsearch/reranking/enabled';
-    private const XML_RERANKING_MODEL = 'vectorsearch/reranking/model';
     private const XML_RERANKING_LIMIT = 'vectorsearch/reranking/limit';
 
     public function __construct(
@@ -152,10 +151,6 @@ class Config
         return $this->scopeConfig->isSetFlag(self::XML_RERANKING_ENABLED);
     }
 
-    public function getRerankingModel(): string
-    {
-        return (string)$this->scopeConfig->getValue(self::XML_RERANKING_MODEL) ?: 'Xenova/ms-marco-MiniLM-L-6-v2';
-    }
 
     public function getRerankingLimit(): int
     {

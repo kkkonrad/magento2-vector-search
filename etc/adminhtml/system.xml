@@ -68,14 +68,6 @@
                     <comment>Włącz drugi etap wyszukiwania za pomocą modelu Cross-Encoder w celu ponownego uszeregowania wyników.</comment>
                     <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
                 </field>
-                <field id="model" translate="label comment" type="text" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Model Rerankera</label>
-                    <comment>Nazwa modelu Cross-Encoder w serwisie Node.js (np. Xenova/ms-marco-MiniLM-L-6-v2)</comment>
-                    <validate>required-entry</validate>
-                    <depends>
-                        <field id="enabled">1</field>
-                    </depends>
-                </field>
                 <field id="limit" translate="label comment" type="text" sortOrder="30" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Limit Rerankingu</label>
                     <comment>Liczba pierwszych produktów z OpenSearch przekazywana do rerankowania (zalecana: 20-40). Pozostałe produkty zostaną doklejone na końcu.</comment>

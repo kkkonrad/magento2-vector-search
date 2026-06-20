@@ -7,8 +7,6 @@
                 <service_url>http://localhost:3000</service_url>
             </embedding>
             <opensearch>
-                <host>localhost</host>
-                <port>9200</port>
                 <index_name>magento_products_vector</index_name>
                 <search_type>hybrid</search_type>
                 <hybrid_combination_technique>arithmetic_mean</hybrid_combination_technique>
@@ -16,12 +14,10 @@
                 <lexical_weight>0.7</lexical_weight>
                 <knn_weight>0.3</knn_weight>
                 <min_similarity>0.85</min_similarity>
-                <username></username>
-                <password></password>
+                <search_limit>100</search_limit>
             </opensearch>
             <reranking>
                 <enabled>0</enabled>
-                <model>Xenova/ms-marco-TinyBERT-L-2-v2</model>
                 <limit>40</limit>
             </reranking>
         </vectorsearch>
