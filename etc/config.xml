@@ -15,7 +15,7 @@
                 <hybrid_normalization_technique>min_max</hybrid_normalization_technique>
                 <lexical_weight>0.7</lexical_weight>
                 <knn_weight>0.3</knn_weight>
-                <min_similarity>0.90</min_similarity>
+                <min_similarity>0.85</min_similarity>
                 <username></username>
                 <password></password>
             </opensearch>
