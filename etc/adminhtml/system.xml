@@ -72,9 +72,6 @@
                     <label>Limit Rerankingu</label>
                     <comment>Liczba pierwszych produktów z OpenSearch przekazywana do rerankowania (zalecana: 20-40). Pozostałe produkty zostaną doklejone na końcu.</comment>
                     <validate>validate-digits required-entry</validate>
-                    <depends>
-                        <field id="enabled">1</field>
-                    </depends>
                 </field>
             </group>
         </section>
