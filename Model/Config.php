@@ -21,6 +21,7 @@ class Config
 
     private const XML_RERANKING_ENABLED = 'vectorsearch/reranking/enabled';
     private const XML_RERANKING_LIMIT = 'vectorsearch/reranking/limit';
+    private const XML_RERANKING_MIN_SCORE = 'vectorsearch/reranking/min_score';
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig
@@ -156,6 +157,18 @@ class Config
     {
         $val = $this->scopeConfig->getValue(self::XML_RERANKING_LIMIT);
         return $val !== null && $val !== '' ? (int)$val : 20;
+    }
+
+    /**
+     * Absolute minimum reranker score a product must reach to remain in the priority result set.
+     * Products that score below this floor (and below the dynamic 45% threshold) are demoted to
+     * the tail of the results instead of appearing on page 1.
+     * Default 0.0 means only the dynamic threshold applies.
+     */
+    public function getRerankingMinScore(): float
+    {
+        $val = $this->scopeConfig->getValue(self::XML_RERANKING_MIN_SCORE);
+        return $val !== null && $val !== '' ? (float)$val : 0.0;
     }
 }
 

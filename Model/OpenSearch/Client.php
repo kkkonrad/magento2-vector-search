@@ -573,25 +573,82 @@ class Client
             $rerankLimit = $this->config->getRerankingLimit();
             $candidatesToRerank = array_slice($hits, 0, $rerankLimit);
             $remainingHits = array_slice($hits, $rerankLimit);
+            $productIntentTerms = $this->getProductIntentTerms($queryText);
 
             $documents = [];
+            $documentTextsById = [];
             foreach ($candidatesToRerank as $hit) {
                 $src = $hit['_source'] ?? [];
+                $id = (int)($src['entity_id'] ?? 0);
+                $text = mb_substr((string)($src['embedding_text'] ?? ''), 0, 1000);
                 $documents[] = [
-                    'id' => (int)($src['entity_id'] ?? 0),
-                    'text' => mb_substr((string)($src['embedding_text'] ?? ''), 0, 1000)
+                    'id' => $id,
+                    'text' => $text
                 ];
+                $documentTextsById[$id] = $text;
             }
 
             try {
                 $ranked = $this->embeddingClient->rerank($queryText, $documents);
                 if (!empty($ranked)) {
-                    $rerankedIds = array_column($ranked, 'id');
+                    // Find the largest relative score drop between consecutive reranker results.
+                    // This approach works for both positive-score models (ms-marco-TinyBERT) and
+                    // negative-score models (bge-reranker-base) where a percentage of max is broken.
+                    //
+                    // Algorithm:
+                    //  1. Walk through ranked results (already ordered best→worst).
+                    //  2. Compute the absolute gap between each consecutive pair.
+                    //  3. If the largest gap exceeds minGapFraction × total score range, cut there.
+                    //  4. Everything after the cut is demoted to the tail of the result list.
+                    //
+                    // Config "min_score" still acts as an absolute floor (useful when you know the
+                    // model's typical relevance range, e.g. set to 0 to always exclude negatives).
+                    $configMinScore = (float)($this->config->getRerankingMinScore() ?? -999.0);
+                    $minGapFraction = 0.35; // cut only when the drop is ≥35% of total score range
+
+                    $scores = array_column($ranked, 'score');
+                    $topScore = count($scores) > 0 ? max($scores) : 0.0;
+                    $botScore = count($scores) > 0 ? min($scores) : 0.0;
+                    $scoreRange = $topScore - $botScore; // always ≥ 0
+
+                    // Find the cut-point index (after which we demote)
+                    $cutAfter = count($ranked) - 1; // default: keep all
+                    if ($scoreRange > 0.0001) {
+                        $minGapAbs = $scoreRange * $minGapFraction;
+                        $prevScore = $topScore;
+                        for ($i = 0; $i < count($scores); $i++) {
+                            $gap = $prevScore - $scores[$i];
+                            if ($gap >= $minGapAbs) {
+                                $cutAfter = $i - 1;
+                                break;
+                            }
+                            $prevScore = $scores[$i];
+                        }
+                    }
+
+                    $relevantIds = [];
+                    $poorIds     = [];
+                    foreach ($ranked as $i => $item) {
+                        $id = (int)($item['id'] ?? 0);
+                        $score = (float)($item['score'] ?? 0.0);
+                        $matchesProductIntent = $this->matchesProductIntent(
+                            $documentTextsById[$id] ?? '',
+                            $productIntentTerms
+                        );
+                        // Apply the product intent guard, the gap-cut and the absolute config floor.
+                        if ($matchesProductIntent && $i <= $cutAfter && $score >= $configMinScore) {
+                            $relevantIds[] = $id;
+                        } else {
+                            $poorIds[] = $id;
+                        }
+                    }
+
                     $remainingIds = array_map(
                         static fn(array $hit): int => (int)$hit['_source']['entity_id'],
                         $remainingHits
                     );
-                    return array_values(array_unique(array_merge($rerankedIds, $remainingIds)));
+                    // Order: good reranked → remaining OpenSearch hits → demoted reranked
+                    return array_values(array_unique(array_merge($relevantIds, $remainingIds, $poorIds)));
                 }
             } catch (\Throwable $e) {
                 $this->logger->error('[VectorSearch] Reranking failed during search, falling back to OpenSearch order: ' . $e->getMessage());
@@ -600,6 +657,69 @@ class Client
 
         return $entityIds;
     }
+
+    /**
+     * Detects concrete product-type intent in a query.
+     *
+     * Rerankers can overvalue broad modifiers such as "dla kobiet" and promote
+     * accessories above the requested product type. When a query clearly names a
+     * product family, candidates from other families are demoted after reranking.
+     *
+     * @return string[]
+     */
+    private function getProductIntentTerms(string $queryText): array
+    {
+        $stemmedQuery = $this->stemmer->stemText($queryText);
+
+        $groups = [
+            ['spodn', 'leggins', 'rybacz', 'capri'],
+            ['szort'],
+            ['koszulk', 'shirt', 't-shirt', 'bez rękaw', 'bez rekaw', 'tank'],
+            ['kurtk', 'jacket'],
+            ['bluz', 'hoodie'],
+            ['stanik', 'biustonosz', 'bra'],
+            ['but', 'shoe'],
+            ['torb', 'plecak', 'bag', 'backpack'],
+            ['butelk', 'bidon'],
+            ['mat'],
+            ['piłk', 'pilk', 'ball'],
+            ['klocek', 'blok', 'block'],
+            ['zegar', 'zegarek', 'watch'],
+        ];
+
+        foreach ($groups as $terms) {
+            foreach ($terms as $term) {
+                if (mb_stripos($stemmedQuery, $term) !== false) {
+                    return $terms;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Returns true when no concrete product intent was detected, or when the
+     * candidate text contains at least one term from the detected product family.
+     *
+     * @param string[] $intentTerms
+     */
+    private function matchesProductIntent(string $documentText, array $intentTerms): bool
+    {
+        if (empty($intentTerms)) {
+            return true;
+        }
+
+        $stemmedText = $this->stemmer->stemText($documentText);
+        foreach ($intentTerms as $term) {
+            if (mb_stripos($stemmedText, $term) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 
     public function deleteProduct(int $entityId): void
     {

@@ -73,6 +73,11 @@
                     <comment>Liczba pierwszych produktów z OpenSearch przekazywana do rerankowania (zalecana: 20-40). Pozostałe produkty zostaną doklejone na końcu.</comment>
                     <validate>validate-digits required-entry</validate>
                 </field>
+                <field id="min_score" translate="label comment" type="text" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Minimalny Score Rerankingu (floor)</label>
+                    <comment>Absolutny próg score rerankera. Produkty poniżej tego progu są zawsze przenoszone na koniec (np. 0 = wyklucz ujemne wyniki dla bge-reranker, -999 = wyłączone). Główna filtracja odbywa się przez wykrywanie luki w wynikach (35% zakresu).</comment>
+                    <validate>validate-number</validate>
+                </field>
             </group>
         </section>
     </system>
