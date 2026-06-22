@@ -5,6 +5,7 @@ const PORT = process.env.PORT || 3000;
 const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-small';
 const RERANKER_MODEL = process.env.RERANKER_MODEL || 'Xenova/ms-marco-TinyBERT-L-2-v2';
 const MAX_BATCH_SIZE = parseInt(process.env.MAX_BATCH_SIZE || '64', 10);
+const ENABLE_RERANKER = process.env.ENABLE_RERANKER !== '0';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -74,6 +75,11 @@ async function loadModel() {
 }
 
 async function loadReranker() {
+    if (!ENABLE_RERANKER) {
+        console.log('[embedding-service] Reranker disabled by ENABLE_RERANKER=0.');
+        return;
+    }
+
     console.log(`[embedding-service] Loading reranker model ${RERANKER_MODEL}...`);
     rerankerModel = await AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL, {
         cache_dir: './models',
@@ -227,6 +233,8 @@ app.get('/health', (_req, res) => {
         batchSize: MAX_BATCH_SIZE,
         queued: { high: queues.high.length, normal: queues.normal.length },
         workerBusy: running,
+        rerankerEnabled: ENABLE_RERANKER,
+        rerankerReady: !!(rerankerModel && rerankerTokenizer),
     });
 });
 

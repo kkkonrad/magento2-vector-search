@@ -3,7 +3,6 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Model\OpenSearch;
 
-use Magento\Framework\HTTP\Client\Curl;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
@@ -303,7 +302,7 @@ class Client
 
         $body = '';
         foreach ($docs as $doc) {
-            $body .= json_encode(['index' => ['_id' => (string)$doc['entity_id']]]) . "\n";
+            $body .= json_encode(['index' => ['_id' => $this->documentId((int)$doc['store_id'], (int)$doc['entity_id'])]]) . "\n";
             $body .= json_encode($doc, JSON_UNESCAPED_UNICODE) . "\n";
         }
 
@@ -503,9 +502,10 @@ class Client
         $sourceFields = $this->config->isRerankingEnabled() ? ['entity_id', 'embedding_text'] : ['entity_id'];
 
         if ($searchType === 'pure_knn' || $searchType === 'knn') {
-            // Pure kNN semantic search (ignores lexical shouldClauses)
-            // Since nmslib does not support the 'filter' parameter inside the 'knn' clause,
-            // we must use a bool query with post-filtering.
+            // Pure kNN semantic search (ignores lexical shouldClauses).
+            // Overfetch before bool filtering so store/category/attribute filters do not leave
+            // sparse pages when the nearest global vectors are filtered out afterwards.
+            $knnCandidateSize = max($size * 5, 100);
             $query = [
                 'size'    => $size,
                 '_source' => $sourceFields,
@@ -515,7 +515,7 @@ class Client
                             'knn' => [
                                 'embedding' => [
                                     'vector' => $vector,
-                                    'k'      => $size,
+                                    'k'      => $knnCandidateSize,
                                 ],
                             ],
                         ],
@@ -721,9 +721,24 @@ class Client
     }
 
 
-    public function deleteProduct(int $entityId): void
+    private function documentId(int $storeId, int $entityId): string
     {
-        $this->request('DELETE', '/' . $this->indexName() . "/_doc/{$entityId}", [], false);
+        return $storeId . '_' . $entityId;
+    }
+
+
+    public function deleteProduct(int $entityId, ?int $storeId = null): void
+    {
+        if ($storeId !== null) {
+            $this->request('DELETE', '/' . $this->indexName() . '/_doc/' . $this->documentId($storeId, $entityId), [], false);
+            return;
+        }
+
+        $this->request('POST', '/' . $this->indexName() . '/_delete_by_query', [
+            'query' => [
+                'term' => ['entity_id' => $entityId]
+            ]
+        ], false);
     }
 
     /**
@@ -732,18 +747,25 @@ class Client
      * @param int[] $entityIds
      * @return array
      */
-    public function getDocsForHashCheck(array $entityIds): array
+    public function getDocsForHashCheck(array $entityIds, ?int $storeId = null): array
     {
         if (empty($entityIds)) {
             return [];
         }
 
+        $filters = [
+            ['terms' => ['entity_id' => array_map('intval', $entityIds)]]
+        ];
+        if ($storeId !== null) {
+            $filters[] = ['term' => ['store_id' => $storeId]];
+        }
+
         $query = [
             'size' => count($entityIds),
-            '_source' => ['entity_id', 'embedding_text_hash', 'embedding'],
+            '_source' => ['entity_id', 'store_id', 'embedding_text_hash', 'embedding'],
             'query' => [
-                'terms' => [
-                    'entity_id' => array_map('intval', $entityIds)
+                'bool' => [
+                    'filter' => $filters
                 ]
             ]
         ];
@@ -854,10 +876,13 @@ class Client
             return [];
         }
 
+        $statusCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $response = json_decode((string)$raw, true) ?? [];
 
-        if ($logErrors && isset($response['error'])) {
-            $this->logger->error('[VectorSearch] OpenSearch error: ' . $raw);
+        if ($logErrors && ($statusCode >= 400 || isset($response['error']))) {
+            $this->logger->error(
+                '[VectorSearch] OpenSearch HTTP ' . $statusCode . ' error for ' . $method . ' ' . $url . ': ' . $raw
+            );
         }
 
         return $response;

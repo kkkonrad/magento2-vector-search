@@ -1,3 +1,5 @@
-embedding-service/node_modules
-embedding-service/models
+embedding-service/node_modules/
+embedding-service/models/
 *.log
+embedding-service/screen_output.txt
+embedding-service/npm-debug.log*

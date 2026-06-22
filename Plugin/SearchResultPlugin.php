@@ -71,9 +71,16 @@ class SearchResultPlugin
                 return $result;
             }
 
-            // Construct Document objects matching the hybrid results
+            $totalCount = count($entityIds);
+            $pageSize = (int)($searchCriteria->getPageSize() ?: $totalCount);
+            $currentPage = max(1, (int)($searchCriteria->getCurrentPage() ?: 1));
+            $pageIds = $pageSize > 0
+                ? array_slice($entityIds, ($currentPage - 1) * $pageSize, $pageSize)
+                : $entityIds;
+
+            // Construct Document objects matching the requested page of hybrid results.
             $documents = [];
-            foreach ($entityIds as $id) {
+            foreach ($pageIds as $id) {
                 $document = $this->documentFactory->create();
                 $document->setId($id);
                 $document->setCustomAttributes([]);
@@ -81,7 +88,7 @@ class SearchResultPlugin
             }
 
             $result->setItems($documents);
-            $result->setTotalCount(count($entityIds));
+            $result->setTotalCount($totalCount);
 
             $this->logger->debug(
                 '[VectorSearch] Injected ' . count($entityIds) . ' hybrid search items into SearchResult for: ' . $queryText

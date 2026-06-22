@@ -13,7 +13,10 @@ use Kkkonrad\VectorSearch\Model\EmbeddingClient;
 use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
 use Magento\Framework\App\ResourceConnection;
+use Magento\Framework\App\CacheInterface;
+use Magento\Framework\App\ObjectManager;
 use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
+use Kkkonrad\VectorSearch\Model\Cache\Type as VectorSearchCacheType;
 
 /**
  * Vector search product indexer.
@@ -48,7 +51,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         private readonly LoggerInterface         $logger,
         private readonly AttributeWeightProvider $weightProvider,
         private readonly ResourceConnection     $resource,
-        private readonly PolishStemmer           $stemmer
+        private readonly PolishStemmer           $stemmer,
+        private readonly ?CacheInterface         $cache = null
     ) {}
 
     // -------------------------------------------------------------------------
@@ -58,8 +62,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
     public function executeFull(): void
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
-        // Recreate index only if there is a dimension/mapping mismatch (handled inside ensureIndex)
-        $this->openSearchClient->ensureIndex(false);
+        // Full rebuild recreates the index so stale legacy document IDs cannot survive migrations.
+        $this->openSearchClient->ensureIndex(true);
 
         foreach ($this->storeManager->getStores() as $store) {
             $storeId = (int)$store->getId();
@@ -67,6 +71,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
             $this->indexStore($storeId);
         }
 
+        $this->cleanSearchCache();
         $this->logger->info('[VectorSearch] Full reindex complete.');
     }
 
@@ -78,6 +83,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         foreach ($this->storeManager->getStores() as $store) {
             $this->indexStore((int)$store->getId(), $ids);
         }
+
+        $this->cleanSearchCache();
     }
 
     public function execute($ids): void
@@ -185,7 +192,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
         if (!empty($productIds)) {
             $skipped = array_diff(array_map('intval', $productIds), $processedIds);
             foreach ($skipped as $deleteId) {
-                $this->openSearchClient->deleteProduct($deleteId);
+                $this->openSearchClient->deleteProduct($deleteId, $storeId);
                 $this->logger->info("[VectorSearch] Deleted product {$deleteId} from index.");
             }
         } else {
@@ -249,7 +256,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
         $existingEmbeddings = [];
         try {
             $entityIds = array_column($batch, 'entity_id');
-            $response = $this->openSearchClient->getDocsForHashCheck($entityIds);
+            $response = $this->openSearchClient->getDocsForHashCheck($entityIds, $storeId);
             foreach ($response['hits']['hits'] ?? [] as $hit) {
                 $source = $hit['_source'] ?? [];
                 $id = (int)($source['entity_id'] ?? 0);
@@ -357,6 +364,17 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
         $this->openSearchClient->bulk($docs);
         $this->logger->info('[VectorSearch] Indexed ' . count($docs) . " products for store {$storeId}.");
+    }
+
+
+    private function cleanSearchCache(): void
+    {
+        try {
+            $cache = $this->cache ?? ObjectManager::getInstance()->get(CacheInterface::class);
+            $cache->clean([VectorSearchCacheType::CACHE_TAG]);
+        } catch (\Throwable $e) {
+            $this->logger->warning('[VectorSearch] Could not clean search cache: ' . $e->getMessage());
+        }
     }
 
 
