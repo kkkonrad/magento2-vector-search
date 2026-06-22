@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Plugin;
 
+use Kkkonrad\VectorSearch\Model\Search\RequestSearchResultStorage;
 use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\Framework\Api\Search\DocumentFactory;
 use Magento\Framework\Api\Search\SearchCriteriaInterface;
@@ -19,16 +20,13 @@ use Psr\Log\LoggerInterface;
  */
 class SearchResultPlugin
 {
-    private const REQUEST_QUERY_PARAM = '__vectorsearch_query';
-    private const REQUEST_STORE_ID_PARAM = '__vectorsearch_store_id';
-    private const REQUEST_IDS_PARAM = '__vectorsearch_ids';
-
     public function __construct(
         private readonly RequestInterface $request,
         private readonly StoreManagerInterface $storeManager,
         private readonly LoggerInterface $logger,
         private readonly DocumentFactory $documentFactory,
-        private readonly ?VectorSearchService $vectorSearchService = null
+        private readonly ?VectorSearchService $vectorSearchService = null,
+        private readonly ?RequestSearchResultStorage $requestSearchResultStorage = null
     ) {}
 
     /**
@@ -98,13 +96,14 @@ class SearchResultPlugin
      */
     private function markSearchHandled(string $queryText, int $storeId, array $entityIds): void
     {
-        if (!method_exists($this->request, 'setParam')) {
-            return;
-        }
+        $this->getRequestSearchResultStorage()->mark($queryText, $storeId, $entityIds);
+    }
 
-        $this->request->setParam(self::REQUEST_QUERY_PARAM, $queryText);
-        $this->request->setParam(self::REQUEST_STORE_ID_PARAM, $storeId);
-        $this->request->setParam(self::REQUEST_IDS_PARAM, json_encode(array_values($entityIds)));
+
+    private function getRequestSearchResultStorage(): RequestSearchResultStorage
+    {
+        return $this->requestSearchResultStorage
+            ?? ObjectManager::getInstance()->get(RequestSearchResultStorage::class);
     }
 
 

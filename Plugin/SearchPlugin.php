@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Plugin;
 
+use Kkkonrad\VectorSearch\Model\Search\RequestSearchResultStorage;
 use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\CatalogSearch\Model\ResourceModel\Fulltext\Collection;
 use Magento\Framework\App\ObjectManager;
@@ -16,10 +17,6 @@ use Psr\Log\LoggerInterface;
  */
 class SearchPlugin
 {
-    private const REQUEST_QUERY_PARAM = '__vectorsearch_query';
-    private const REQUEST_STORE_ID_PARAM = '__vectorsearch_store_id';
-    private const REQUEST_IDS_PARAM = '__vectorsearch_ids';
-
     /**
      * Track processed collections to prevent infinite recursion when calling getItems().
      *
@@ -31,7 +28,8 @@ class SearchPlugin
         private readonly RequestInterface $request,
         private readonly StoreManagerInterface $storeManager,
         private readonly LoggerInterface $logger,
-        private readonly ?VectorSearchService $vectorSearchService = null
+        private readonly ?VectorSearchService $vectorSearchService = null,
+        private readonly ?RequestSearchResultStorage $requestSearchResultStorage = null
     ) {}
 
     /**
@@ -94,25 +92,20 @@ class SearchPlugin
      */
     private function getMarkedEntityIds(string $queryText, int $storeId): ?array
     {
-        if ((string)$this->request->getParam(self::REQUEST_QUERY_PARAM) !== $queryText) {
-            return null;
-        }
-        if ((int)$this->request->getParam(self::REQUEST_STORE_ID_PARAM) !== $storeId) {
-            return null;
-        }
-
-        $rawIds = (string)$this->request->getParam(self::REQUEST_IDS_PARAM, '');
-        if ($rawIds === '') {
-            return null;
-        }
-
-        $ids = json_decode($rawIds, true);
-        if (!is_array($ids)) {
+        $ids = $this->getRequestSearchResultStorage()->get($queryText, $storeId);
+        if ($ids === null) {
             return null;
         }
 
         $this->logger->debug('[VectorSearch] Reusing request-marked IDs for collection ordering: ' . $queryText);
-        return array_values(array_map('intval', $ids));
+        return $ids;
+    }
+
+
+    private function getRequestSearchResultStorage(): RequestSearchResultStorage
+    {
+        return $this->requestSearchResultStorage
+            ?? ObjectManager::getInstance()->get(RequestSearchResultStorage::class);
     }
 
 

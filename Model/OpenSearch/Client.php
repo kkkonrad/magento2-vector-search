@@ -643,12 +643,27 @@ class Client
                         }
                     }
 
-                    $remainingIds = array_map(
-                        static fn(array $hit): int => (int)$hit['_source']['entity_id'],
-                        $remainingHits
-                    );
-                    // Order: good reranked → remaining OpenSearch hits → demoted reranked
-                    return array_values(array_unique(array_merge($relevantIds, $remainingIds, $poorIds)));
+                    $remainingRelevantIds = [];
+                    $remainingPoorIds = [];
+                    foreach ($remainingHits as $hit) {
+                        $src = $hit['_source'] ?? [];
+                        $id = (int)($src['entity_id'] ?? 0);
+                        $text = mb_substr((string)($src['embedding_text'] ?? ''), 0, 1000);
+
+                        if ($this->matchesProductIntent($text, $productIntentTerms)) {
+                            $remainingRelevantIds[] = $id;
+                        } else {
+                            $remainingPoorIds[] = $id;
+                        }
+                    }
+
+                    // Order: good reranked → matching OpenSearch hits → demoted reranked → non-matching hits.
+                    return array_values(array_unique(array_merge(
+                        $relevantIds,
+                        $remainingRelevantIds,
+                        $poorIds,
+                        $remainingPoorIds
+                    )));
                 }
             } catch (\Throwable $e) {
                 $this->logger->error('[VectorSearch] Reranking failed during search, falling back to OpenSearch order: ' . $e->getMessage());
@@ -673,7 +688,7 @@ class Client
 
         $groups = [
             ['spodn', 'leggins', 'rybacz', 'capri'],
-            ['szort'],
+            ['szort', 'spoden'],
             ['koszulk', 'shirt', 't-shirt', 'bez rękaw', 'bez rekaw', 'tank'],
             ['kurtk', 'jacket'],
             ['bluz', 'hoodie'],
