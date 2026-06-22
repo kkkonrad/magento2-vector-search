@@ -579,7 +579,7 @@ class Client
                 $src = $hit['_source'] ?? [];
                 $documents[] = [
                     'id' => (int)($src['entity_id'] ?? 0),
-                    'text' => mb_substr((string)($src['embedding_text'] ?? ''), 0, 300)
+                    'text' => mb_substr((string)($src['embedding_text'] ?? ''), 0, 1000)
                 ];
             }
 

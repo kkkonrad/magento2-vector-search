@@ -343,7 +343,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
                     'sku'                 => (string)($productData['sku'] ?? ''),
                     'store_id'            => $storeId,
                     'category_ids'        => array_map('intval', $categoryIds),
-                    'name'                => $this->stemmer->stemText($this->docFieldToString($doc['name'] ?? $productData['name'] ?? '')),
+                    'name'                => $this->stemmer->stemText(explode("\n", $this->docFieldToString($productData['name'] ?? $doc['name'] ?? ''))[0]),
                     'description'         => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
                     'status'              => (int)($productData['status'] ?? 1),
                     'visibility'          => (int)($productData['visibility'] ?? 4),
@@ -382,7 +382,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         $text = '';
 
         // Name
-        $name = $this->docFieldToString($doc['name'] ?? $productData['name'] ?? '');
+        $name = $this->docFieldToString($productData['name'] ?? $doc['name'] ?? '');
+        $name = explode("\n", $name)[0];
         if ($name !== '') {
             $text .= "Nazwa: " . $name . ". ";
         }
