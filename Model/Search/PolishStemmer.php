@@ -50,6 +50,12 @@ class PolishStemmer
             if (in_array(mb_substr($word, -2), ["ek", "ak"], true)) {
                 return mb_substr($word, 0, -2);
             }
+            if (in_array(mb_substr($word, -2), ["ka", "ki"], true)) {
+                $prevChar = mb_substr($word, -3, 1);
+                if (!in_array($prevChar, ["s", "c"], true)) {
+                    return mb_substr($word, 0, -2);
+                }
+            }
         }
         return $word;
     }
