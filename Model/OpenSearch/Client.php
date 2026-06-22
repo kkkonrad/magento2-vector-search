@@ -483,14 +483,14 @@ class Client
             $shouldClauses[] = [
                 'multi_match' => [
                     'query'  => $maleQuery,
-                    'fields' => ['description^5', 'attr_gender^10'],
+                    'fields' => ['attr_gender^10'],
                 ]
             ];
         } elseif ($isFemale && !$isMale) {
             $shouldClauses[] = [
                 'multi_match' => [
                     'query'  => $femaleQuery,
-                    'fields' => ['description^5', 'attr_gender^10'],
+                    'fields' => ['attr_gender^10'],
                 ]
             ];
         }
