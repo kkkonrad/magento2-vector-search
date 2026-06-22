@@ -3,39 +3,22 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Plugin;
 
+use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\CatalogSearch\Model\ResourceModel\Fulltext\Collection;
-use Magento\Framework\App\CacheInterface;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\RequestInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
-use Kkkonrad\VectorSearch\Model\EmbeddingClient;
-use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
 
 /**
- * Intercepts the catalog search collection and replaces result IDs
- * with those from the vector kNN + BM25 hybrid search.
- *
- * afterLoad() is called by Magento ~15–20 times per search-results page
- * (main results, layered navigation counts, widget blocks, etc.).
- * To avoid hitting the embedding service once per call we cache the
- * query vector at two levels:
- *
- *   1. Static (in-memory) cache — instant lookup within the same PHP process.
- *   2. Magento cache (tag: vectorsearch_embedding) — survives across requests
- *      so the same query phrase is only embedded once per cache lifetime.
+ * Intercepts the catalog search collection and reorders loaded products using
+ * the shared vector search service.
  */
 class SearchPlugin
 {
-    private const CACHE_TAG      = 'vectorsearch_embedding';
-    private const CACHE_LIFETIME = 3600; // 1 hour
-
-    /**
-     * In-process cache: query string → entity_id[]
-     * Keyed by "{storeId}:{queryText}" so store switching is safe.
-     *
-     * @var array<string, int[]>
-     */
-    private static array $processCache = [];
+    private const REQUEST_QUERY_PARAM = '__vectorsearch_query';
+    private const REQUEST_STORE_ID_PARAM = '__vectorsearch_store_id';
+    private const REQUEST_IDS_PARAM = '__vectorsearch_ids';
 
     /**
      * Track processed collections to prevent infinite recursion when calling getItems().
@@ -45,16 +28,11 @@ class SearchPlugin
     private static array $processedCollections = [];
 
     public function __construct(
-        private readonly EmbeddingClient       $embeddingClient,
-        private readonly OpenSearchClient      $openSearchClient,
-        private readonly RequestInterface      $request,
+        private readonly RequestInterface $request,
         private readonly StoreManagerInterface $storeManager,
-        private readonly CacheInterface        $cache,
-        private readonly LoggerInterface       $logger,
-        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState,
-        private readonly \Kkkonrad\VectorSearch\Model\Config $config
+        private readonly LoggerInterface $logger,
+        private readonly ?VectorSearchService $vectorSearchService = null
     ) {}
-
 
     /**
      * After the collection loads, if we are on a search results page,
@@ -74,129 +52,73 @@ class SearchPlugin
         self::$processedCollections[$hash] = true;
 
         try {
-            $storeId  = (int)$this->storeManager->getStore()->getId();
-            $criteriaFilters = $this->getRequestFilters();
-            $entityIds = $this->getEntityIds($queryText, $storeId, $criteriaFilters);
+            $storeId = (int)$this->storeManager->getStore()->getId();
+            $entityIds = $this->getMarkedEntityIds($queryText, $storeId);
+            if ($entityIds === null) {
+                $service = $this->getVectorSearchService();
+                $criteriaFilters = $service->extractRequestFilters($this->request->getParams());
+                $entityIds = $service->getEntityIds($queryText, $storeId, $criteriaFilters);
+            }
 
             if (empty($entityIds)) {
                 return $result;
             }
 
-            // Reorder the loaded collection items to match vector search ranking.
-            $positions = array_flip($entityIds); // entity_id => rank
-            $items     = $result->getItems();
-            $ranked    = [];
+            $positions = array_flip($entityIds);
+            $items = $result->getItems();
+            $ranked = [];
 
             foreach ($items as $item) {
-                $id          = (int)$item->getId();
+                $id = (int)$item->getId();
                 $ranked[$id] = $positions[$id] ?? PHP_INT_MAX;
             }
             asort($ranked);
 
             $result->removeAllItems();
-
             foreach (array_keys($ranked) as $entityId) {
                 if (isset($items[$entityId])) {
                     $result->addItem($items[$entityId]);
                 }
             }
 
-            $this->logger->debug(
-                '[VectorSearch] Reranked ' . count($ranked) . ' results for: ' . $queryText
-            );
+            $this->logger->debug('[VectorSearch] Reranked ' . count($ranked) . ' collection items for: ' . $queryText);
         } catch (\Exception $e) {
-            // Fail gracefully — fall back to default Magento search.
-            $this->logger->error('[VectorSearch] Plugin error: ' . $e->getMessage());
+            $this->logger->error('[VectorSearch] Collection plugin error: ' . $e->getMessage());
         }
 
         return $result;
     }
 
     /**
-     * Extracts layered navigation filters from request parameters.
+     * @return int[]|null
      */
-    private function getRequestFilters(): array
+    private function getMarkedEntityIds(string $queryText, int $storeId): ?array
     {
-        $params = $this->request->getParams();
-        $excluded = [
-            'q', 'p', 'product_list_order', 'product_list_dir', 
-            'product_list_limit', 'product_list_mode', 'id', 'ajax', 'price'
-        ];
-        $filters = [];
-        foreach ($params as $field => $value) {
-            if (in_array($field, $excluded, true)) {
-                continue;
-            }
-            if ($value === null || $value === '') {
-                continue;
-            }
-            $filters[] = [
-                'field' => $field,
-                'value' => $value
-            ];
+        if ((string)$this->request->getParam(self::REQUEST_QUERY_PARAM) !== $queryText) {
+            return null;
         }
-        return $filters;
+        if ((int)$this->request->getParam(self::REQUEST_STORE_ID_PARAM) !== $storeId) {
+            return null;
+        }
+
+        $rawIds = (string)$this->request->getParam(self::REQUEST_IDS_PARAM, '');
+        if ($rawIds === '') {
+            return null;
+        }
+
+        $ids = json_decode($rawIds, true);
+        if (!is_array($ids)) {
+            return null;
+        }
+
+        $this->logger->debug('[VectorSearch] Reusing request-marked IDs for collection ordering: ' . $queryText);
+        return array_values(array_map('intval', $ids));
     }
 
-    // -------------------------------------------------------------------------
 
-    /**
-     * Returns entity IDs from hybrid search, using a two-level cache
-     * to avoid redundant embedding calls when afterLoad() fires many times
-     * per page for the same query.
-     *
-     * @return int[]
-     */
-    private function getEntityIds(string $queryText, int $storeId, array $criteriaFilters): array
+    private function getVectorSearchService(): VectorSearchService
     {
-        $filterHash = md5(json_encode($criteriaFilters));
-        $modelName  = $this->embeddingClient->getModelName();
-        $cacheKey   = $storeId . ':' . $queryText . ':' . $filterHash . ':' . $modelName;
-
-        // Level 1: in-process static cache (same PHP process / request).
-        if (array_key_exists($cacheKey, self::$processCache)) {
-            $this->logger->debug('[VectorSearch] Process-cache hit for: ' . $queryText);
-            return self::$processCache[$cacheKey];
-        }
-
-        $cacheEnabled = $this->cacheState->isEnabled(\Kkkonrad\VectorSearch\Model\Cache\Type::TYPE_IDENTIFIER);
-
-        // Level 2: Magento persistent cache (survives across requests).
-        $magentoCacheKey = 'vectorsearch_ids_' . md5($cacheKey);
-        if ($cacheEnabled) {
-            $cached = $this->cache->load($magentoCacheKey);
-            if ($cached !== false) {
-                $ids = json_decode($cached, true) ?? [];
-                $this->logger->debug('[VectorSearch] Magento-cache hit for: ' . $queryText);
-                return self::$processCache[$cacheKey] = $ids;
-            }
-        }
-
-        // Level 3: Live query — embed + hybrid search.
-        $vector = $this->embeddingClient->embedOne($queryText, 'query');
-        if (empty($vector)) {
-            return self::$processCache[$cacheKey] = [];
-        }
-
-        $ids = $this->openSearchClient->hybridSearch(
-            $queryText,
-            $vector,
-            $this->config->getOpenSearchSearchLimit(),
-            $storeId,
-            $criteriaFilters
-        );
-
-        // Persist to both caches.
-        self::$processCache[$cacheKey] = $ids;
-        if ($cacheEnabled) {
-            $this->cache->save(
-                json_encode($ids),
-                $magentoCacheKey,
-                [\Kkkonrad\VectorSearch\Model\Cache\Type::CACHE_TAG],
-                self::CACHE_LIFETIME
-            );
-        }
-
-        return $ids;
+        return $this->vectorSearchService
+            ?? ObjectManager::getInstance()->get(VectorSearchService::class);
     }
 }

@@ -16,6 +16,7 @@ use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\App\CacheInterface;
 use Magento\Framework\App\ObjectManager;
 use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
+use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Kkkonrad\VectorSearch\Model\Cache\Type as VectorSearchCacheType;
 
 /**
@@ -52,7 +53,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
         private readonly AttributeWeightProvider $weightProvider,
         private readonly ResourceConnection     $resource,
         private readonly PolishStemmer           $stemmer,
-        private readonly ?CacheInterface         $cache = null
+        private readonly ?CacheInterface         $cache = null,
+        private readonly ?VectorSearchService    $vectorSearchService = null
     ) {}
 
     // -------------------------------------------------------------------------
@@ -372,6 +374,9 @@ class ProductVector implements ActionInterface, MviewActionInterface
         try {
             $cache = $this->cache ?? ObjectManager::getInstance()->get(CacheInterface::class);
             $cache->clean([VectorSearchCacheType::CACHE_TAG]);
+            $service = $this->vectorSearchService ?? ObjectManager::getInstance()->get(VectorSearchService::class);
+            $version = $service->bumpIndexVersion();
+            $this->logger->info('[VectorSearch] Bumped search index cache version to ' . $version . '.');
         } catch (\Throwable $e) {
             $this->logger->warning('[VectorSearch] Could not clean search cache: ' . $e->getMessage());
         }

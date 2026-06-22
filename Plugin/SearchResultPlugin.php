@@ -3,16 +3,15 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Plugin;
 
+use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\Framework\Api\Search\DocumentFactory;
 use Magento\Framework\Api\Search\SearchCriteriaInterface;
 use Magento\Framework\Api\Search\SearchResultInterface;
-use Magento\Search\Api\SearchInterface;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\RequestInterface;
+use Magento\Search\Api\SearchInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
-use Kkkonrad\VectorSearch\Model\EmbeddingClient;
-use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
-use Magento\Framework\App\CacheInterface;
 
 /**
  * Intercepts search service calls to substitute search results early,
@@ -20,27 +19,16 @@ use Magento\Framework\App\CacheInterface;
  */
 class SearchResultPlugin
 {
-    private const CACHE_TAG      = 'vectorsearch_embedding';
-    private const CACHE_LIFETIME = 3600; // 1 hour
-
-    /**
-     * In-process cache: query string → entity_id[]
-     * Keyed by "{storeId}:{queryText}" so store switching is safe.
-     *
-     * @var array<string, int[]>
-     */
-    private static array $processCache = [];
+    private const REQUEST_QUERY_PARAM = '__vectorsearch_query';
+    private const REQUEST_STORE_ID_PARAM = '__vectorsearch_store_id';
+    private const REQUEST_IDS_PARAM = '__vectorsearch_ids';
 
     public function __construct(
-        private readonly EmbeddingClient       $embeddingClient,
-        private readonly OpenSearchClient      $openSearchClient,
-        private readonly RequestInterface      $request,
+        private readonly RequestInterface $request,
         private readonly StoreManagerInterface $storeManager,
-        private readonly CacheInterface        $cache,
-        private readonly LoggerInterface       $logger,
-        private readonly DocumentFactory       $documentFactory,
-        private readonly \Magento\Framework\App\Cache\StateInterface $cacheState,
-        private readonly \Kkkonrad\VectorSearch\Model\Config $config
+        private readonly LoggerInterface $logger,
+        private readonly DocumentFactory $documentFactory,
+        private readonly ?VectorSearchService $vectorSearchService = null
     ) {}
 
     /**
@@ -61,24 +49,28 @@ class SearchResultPlugin
         }
 
         try {
-            $storeId   = (int)$this->storeManager->getStore()->getId();
-            $criteriaFilters = $this->getRequestFilters();
-            $entityIds = $this->getEntityIds($queryText, $storeId, $criteriaFilters);
+            $service = $this->getVectorSearchService();
+            $storeId = (int)$this->storeManager->getStore()->getId();
+            $criteriaFilters = $service->extractRequestFilters($this->request->getParams());
+            $pageSize = (int)($searchCriteria->getPageSize() ?: 0);
+            $currentPage = max(1, (int)($searchCriteria->getCurrentPage() ?: 1));
+            $requestedLimit = $this->calculateRequestedLimit($pageSize, $currentPage);
+            $entityIds = $service->getEntityIds($queryText, $storeId, $criteriaFilters, $requestedLimit);
 
             if (empty($entityIds)) {
+                $this->markSearchHandled($queryText, $storeId, []);
                 $result->setItems([]);
                 $result->setTotalCount(0);
                 return $result;
             }
 
+            $this->markSearchHandled($queryText, $storeId, $entityIds);
             $totalCount = count($entityIds);
-            $pageSize = (int)($searchCriteria->getPageSize() ?: $totalCount);
-            $currentPage = max(1, (int)($searchCriteria->getCurrentPage() ?: 1));
+            $pageSize = $pageSize > 0 ? $pageSize : $totalCount;
             $pageIds = $pageSize > 0
                 ? array_slice($entityIds, ($currentPage - 1) * $pageSize, $pageSize)
                 : $entityIds;
 
-            // Construct Document objects matching the requested page of hybrid results.
             $documents = [];
             foreach ($pageIds as $id) {
                 $document = $this->documentFactory->create();
@@ -91,7 +83,8 @@ class SearchResultPlugin
             $result->setTotalCount($totalCount);
 
             $this->logger->debug(
-                '[VectorSearch] Injected ' . count($entityIds) . ' hybrid search items into SearchResult for: ' . $queryText
+                '[VectorSearch] Injected ' . count($documents) . '/' . $totalCount
+                . ' hybrid search items into SearchResult for: ' . $queryText
             );
         } catch (\Exception $e) {
             $this->logger->error('[VectorSearch] SearchResultPlugin error: ' . $e->getMessage());
@@ -101,86 +94,35 @@ class SearchResultPlugin
     }
 
     /**
-     * Extracts layered navigation filters from request parameters.
+     * @param int[] $entityIds
      */
-    private function getRequestFilters(): array
+    private function markSearchHandled(string $queryText, int $storeId, array $entityIds): void
     {
-        $params = $this->request->getParams();
-        $excluded = [
-            'q', 'p', 'product_list_order', 'product_list_dir', 
-            'product_list_limit', 'product_list_mode', 'id', 'ajax', 'price'
-        ];
-        $filters = [];
-        foreach ($params as $field => $value) {
-            if (in_array($field, $excluded, true)) {
-                continue;
-            }
-            if ($value === null || $value === '') {
-                continue;
-            }
-            $filters[] = [
-                'field' => $field,
-                'value' => $value
-            ];
+        if (!method_exists($this->request, 'setParam')) {
+            return;
         }
-        return $filters;
+
+        $this->request->setParam(self::REQUEST_QUERY_PARAM, $queryText);
+        $this->request->setParam(self::REQUEST_STORE_ID_PARAM, $storeId);
+        $this->request->setParam(self::REQUEST_IDS_PARAM, json_encode(array_values($entityIds)));
     }
 
-    /**
-     * Retrieve entity IDs from hybrid search, using two-level cache.
-     *
-     * @return int[]
-     */
-    private function getEntityIds(string $queryText, int $storeId, array $criteriaFilters): array
+
+    private function calculateRequestedLimit(int $pageSize, int $currentPage): ?int
     {
-        $filterHash = md5(json_encode($criteriaFilters));
-        $modelName  = $this->embeddingClient->getModelName();
-        $cacheKey   = $storeId . ':' . $queryText . ':' . $filterHash . ':' . $modelName;
-
-        // Level 1: in-process static cache
-        if (array_key_exists($cacheKey, self::$processCache)) {
-            $this->logger->debug('[VectorSearch] Process-cache hit (SearchResultPlugin) for: ' . $queryText);
-            return self::$processCache[$cacheKey];
+        if ($pageSize <= 0) {
+            return null;
         }
 
-        $cacheEnabled = $this->cacheState->isEnabled(\Kkkonrad\VectorSearch\Model\Cache\Type::TYPE_IDENTIFIER);
+        $neededForPage = $pageSize * max(1, $currentPage);
+        $buffer = max($pageSize * 2, 60);
+        return $neededForPage + $buffer;
+    }
 
-        // Level 2: Magento persistent cache
-        $magentoCacheKey = 'vectorsearch_ids_' . md5($cacheKey);
-        if ($cacheEnabled) {
-            $cached = $this->cache->load($magentoCacheKey);
-            if ($cached !== false) {
-                $ids = json_decode($cached, true) ?? [];
-                $this->logger->debug('[VectorSearch] Magento-cache hit (SearchResultPlugin) for: ' . $queryText);
-                return self::$processCache[$cacheKey] = $ids;
-            }
-        }
 
-        // Level 3: Live query (embed + hybrid search)
-        $vector = $this->embeddingClient->embedOne($queryText, 'query');
-        if (empty($vector)) {
-            return self::$processCache[$cacheKey] = [];
-        }
-
-        // Query up to configured limit to support pagination
-        $ids = $this->openSearchClient->hybridSearch(
-            $queryText,
-            $vector,
-            $this->config->getOpenSearchSearchLimit(),
-            $storeId,
-            $criteriaFilters
-        );
-
-        self::$processCache[$cacheKey] = $ids;
-        if ($cacheEnabled) {
-            $this->cache->save(
-                json_encode($ids),
-                $magentoCacheKey,
-                [\Kkkonrad\VectorSearch\Model\Cache\Type::CACHE_TAG],
-                self::CACHE_LIFETIME
-            );
-        }
-
-        return $ids;
+    private function getVectorSearchService(): VectorSearchService
+    {
+        return $this->vectorSearchService
+            ?? ObjectManager::getInstance()->get(VectorSearchService::class);
     }
 }
