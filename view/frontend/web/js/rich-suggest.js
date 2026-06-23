@@ -6,9 +6,10 @@ define([
     'use strict';
 
     function debounce(callback, delay) {
-        var timeout = null;
+        var timeout = null,
+            debounced;
 
-        return function () {
+        debounced = function () {
             var args = arguments,
                 context = this;
 
@@ -17,6 +18,13 @@ define([
                 callback.apply(context, args);
             }, delay);
         };
+
+        debounced.cancel = function () {
+            clearTimeout(timeout);
+            timeout = null;
+        };
+
+        return debounced;
     }
 
     function escapeHtml(value) {
@@ -35,6 +43,7 @@ define([
             activeIndex = -1,
             responseCache = {},
             responseCacheLifetime = parseInt(config.cacheLifetime || 300000, 10),
+            debouncedFetchSuggestions,
             panel;
 
         if (!input.length || input.data('vectorsearch-rich-suggest')) {
@@ -244,14 +253,23 @@ define([
                 });
         }
 
+        debouncedFetchSuggestions = debounce(fetchSuggestions, suggestionDelay);
+
         input.on('input propertychange', function () {
             hide();
         });
-        input.on('input propertychange', debounce(fetchSuggestions, suggestionDelay));
+        input.on('input propertychange', debouncedFetchSuggestions);
         input.on('focus', function () {
             if ($.trim(input.val()).length >= minLength && panel.children().length) {
                 panel.show();
                 disableNativeAutocomplete();
+            }
+        });
+
+        form.on('submit', function () {
+            debouncedFetchSuggestions.cancel();
+            if (request) {
+                request.abort();
             }
         });
 
@@ -271,6 +289,7 @@ define([
                 event.preventDefault();
                 setActive(activeIndex - 1);
             } else if (key === 'Enter' || key === 13) {
+                debouncedFetchSuggestions.cancel();
                 active = list.eq(activeIndex);
                 if (active.length) {
                     event.preventDefault();
