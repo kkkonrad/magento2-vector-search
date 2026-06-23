@@ -131,7 +131,7 @@ class SearchExplainCommand extends Command
                         '  %d | score=%s | intent=%s | %s',
                         $item['id'] ?? 0,
                         $item['score'] ?? '',
-                        !empty($item['matches_intent']) ? 'yes' : 'no',
+                        (!empty($item['matches_intent']) && ($item['matches_attributes'] ?? true)) ? 'yes' : 'no',
                         $item['decision'] ?? ''
                     ));
                 }

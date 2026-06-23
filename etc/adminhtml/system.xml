@@ -114,9 +114,9 @@
             </group>
             <group id="attribute_intent" translate="label" sortOrder="60" showInDefault="1" showInWebsite="0" showInStore="0">
                 <label>Intencje Atrybutów</label>
-                <field id="color_rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
-                    <label>Reguły kolorów</label>
-                    <comment><![CDATA[Jedna grupa koloru na linię w formacie <code>blue=niebiesk,niebieski,blue</code>. Jeśli query zawiera kolor, produkty bez tego koloru w <code>attr_color</code> są demotowane po rerankingu.]]></comment>
+                <field id="rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Reguły intencji atrybutów</label>
+                    <comment><![CDATA[Jedna reguła na linię w formacie <code>attribute:group=term1,term2</code>, np. <code>color:blue=niebiesk,blue</code> lub <code>material:cotton=bawełn,cotton</code>. Jeśli query zawiera termin, produkty bez dopasowania w <code>attr_attribute</code> są demotowane po rerankingu.]]></comment>
                 </field>
             </group>
             <group id="diagnostics" translate="label" sortOrder="70" showInDefault="1" showInWebsite="0" showInStore="0">

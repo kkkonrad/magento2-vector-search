@@ -6,7 +6,7 @@ namespace Kkkonrad\VectorSearch\Model\OpenSearch;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
-use Kkkonrad\VectorSearch\Model\Search\ColorIntentResolver;
+use Kkkonrad\VectorSearch\Model\Search\AttributeIntentResolver;
 use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
 use Kkkonrad\VectorSearch\Model\Search\ProductIntentResolver;
 use Kkkonrad\VectorSearch\Model\Search\RerankingCircuitBreaker;
@@ -27,7 +27,7 @@ class Client
     private ?SearchDiagnostics $fallbackDiagnostics = null;
     private ?ProductIntentResolver $fallbackProductIntentResolver = null;
     private ?RerankingCircuitBreaker $fallbackRerankingCircuitBreaker = null;
-    private ?ColorIntentResolver $fallbackColorIntentResolver = null;
+    private ?AttributeIntentResolver $fallbackAttributeIntentResolver = null;
 
     public function __construct(
         private readonly Config                  $config,
@@ -38,7 +38,7 @@ class Client
         private readonly ?SearchDiagnostics      $searchDiagnostics = null,
         private readonly ?ProductIntentResolver  $productIntentResolver = null,
         private readonly ?RerankingCircuitBreaker $rerankingCircuitBreaker = null,
-        private readonly ?ColorIntentResolver $colorIntentResolver = null
+        private readonly ?AttributeIntentResolver $attributeIntentResolver = null
     ) {}
 
     public function __destruct()
@@ -605,15 +605,13 @@ class Client
             $remainingHits = array_slice($hits, $rerankLimit);
             $productIntent = $this->productIntentResolver()->resolve($queryText);
             $productIntentTerms = $productIntent['terms'];
-            $colorIntent = $this->colorIntentResolver()->resolve($queryText);
-            $colorIntentTerms = $colorIntent['terms'];
+            $attributeIntents = $this->attributeIntentResolver()->resolve($queryText);
             $this->diagnostics()->event('product_intent_detected', [
                 'group' => $productIntent['name'],
                 'terms' => $productIntentTerms,
             ]);
-            $this->diagnostics()->event('color_intent_detected', [
-                'group' => $colorIntent['name'],
-                'terms' => $colorIntentTerms,
+            $this->diagnostics()->event('attribute_intents_detected', [
+                'intents' => $attributeIntents,
             ]);
 
             $documents = [];
@@ -680,7 +678,7 @@ class Client
 
                     $relevantIds = [];
                     $poorIds = [];
-                    $colorMismatchedPoorIds = [];
+                    $attributeMismatchedPoorIds = [];
                     $rerankedDiagnostics = [];
                     foreach ($ranked as $i => $item) {
                         $id = (int)($item['id'] ?? 0);
@@ -689,17 +687,17 @@ class Client
                             $sourceById[$id] ?? ['embedding_text' => $documentTextsById[$id] ?? ''],
                             $productIntentTerms
                         );
-                        $matchesColorIntent = $this->colorIntentResolver()->matchesSource(
+                        $matchesAttributeIntents = $this->attributeIntentResolver()->matchesSource(
                             $sourceById[$id] ?? [],
-                            $colorIntentTerms
+                            $attributeIntents
                         );
                         // Apply the product intent guard, the gap-cut and the absolute config floor.
-                        if ($matchesProductIntent && $matchesColorIntent && $i <= $cutAfter && $score >= $configMinScore) {
+                        if ($matchesProductIntent && $matchesAttributeIntents && $i <= $cutAfter && $score >= $configMinScore) {
                             $relevantIds[] = $id;
                             $decision = 'relevant';
                         } else {
-                            if (!$matchesColorIntent && !empty($colorIntentTerms)) {
-                                $colorMismatchedPoorIds[] = $id;
+                            if (!$matchesAttributeIntents && !empty($attributeIntents)) {
+                                $attributeMismatchedPoorIds[] = $id;
                             } else {
                                 $poorIds[] = $id;
                             }
@@ -711,7 +709,7 @@ class Client
                                 'id' => $id,
                                 'score' => $score,
                                 'matches_intent' => $matchesProductIntent,
-                                'matches_color' => $matchesColorIntent,
+                                'matches_attributes' => $matchesAttributeIntents,
                                 'decision' => $decision,
                             ];
                         }
@@ -724,7 +722,7 @@ class Client
                         $id = (int)($src['entity_id'] ?? 0);
                         if (
                             $this->productIntentResolver()->matchesSource($src, $productIntentTerms)
-                            && $this->colorIntentResolver()->matchesSource($src, $colorIntentTerms)
+                            && $this->attributeIntentResolver()->matchesSource($src, $attributeIntents)
                         ) {
                             $remainingRelevantIds[] = $id;
                         } else {
@@ -736,7 +734,7 @@ class Client
                         $relevantIds,
                         $remainingRelevantIds,
                         $poorIds,
-                        $colorMismatchedPoorIds,
+                        $attributeMismatchedPoorIds,
                         $remainingPoorIds
                     )));
                     $this->diagnostics()->event('reranking_result', [
@@ -746,7 +744,7 @@ class Client
                         'reranked' => $rerankedDiagnostics,
                         'relevant_count' => count($relevantIds),
                         'demoted_count' => count($poorIds),
-                        'color_mismatched_demoted_count' => count($colorMismatchedPoorIds),
+                        'attribute_mismatched_demoted_count' => count($attributeMismatchedPoorIds),
                         'remaining_relevant_count' => count($remainingRelevantIds),
                         'remaining_demoted_count' => count($remainingPoorIds),
                         'final_top_ids' => array_slice($finalIds, 0, 25),
@@ -829,16 +827,16 @@ class Client
     }
 
 
-    private function colorIntentResolver(): ColorIntentResolver
+    private function attributeIntentResolver(): AttributeIntentResolver
     {
-        if ($this->colorIntentResolver !== null) {
-            return $this->colorIntentResolver;
+        if ($this->attributeIntentResolver !== null) {
+            return $this->attributeIntentResolver;
         }
 
         try {
-            return ObjectManager::getInstance()->get(ColorIntentResolver::class);
+            return ObjectManager::getInstance()->get(AttributeIntentResolver::class);
         } catch (\RuntimeException) {
-            return $this->fallbackColorIntentResolver ??= new ColorIntentResolver($this->config, $this->stemmer);
+            return $this->fallbackAttributeIntentResolver ??= new AttributeIntentResolver($this->config, $this->stemmer);
         }
     }
 

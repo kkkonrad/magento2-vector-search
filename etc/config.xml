@@ -52,15 +52,15 @@ klocek,blok]]></synonym_rules>
                 <stop_words>dla,do,z,ze,i,w,we,na,o,od,po,pod,nad,oraz</stop_words>
             </query_normalization>
             <attribute_intent>
-                <color_rules><![CDATA[blue=niebiesk,niebieski,niebieskie,blue
-black=czarn,czarne,czarny,black
-red=czerwon,czerwone,czerwony,red
-green=zielon,zielone,zielony,green
-yellow=żółt,zolt,żółty,zolty,yellow
-purple=fiolet,fioletowy,purple
-gray=szar,szare,szary,grey,gray
-orange=pomarańcz,pomarancz,pomarańczowy,pomaranczowy,orange
-white=biał,bial,biały,bialy,white]]></color_rules>
+                <rules><![CDATA[color:blue=niebiesk,niebieski,niebieskie,blue
+color:black=czarn,czarne,czarny,black
+color:red=czerwon,czerwone,czerwony,red
+color:green=zielon,zielone,zielony,green
+color:yellow=żółt,zolt,żółty,zolty,yellow
+color:purple=fiolet,fioletowy,purple
+color:gray=szar,szare,szary,grey,gray
+color:orange=pomarańcz,pomarancz,pomarańczowy,pomaranczowy,orange
+color:white=biał,bial,biały,bialy,white]]></rules>
             </attribute_intent>
             <diagnostics>
                 <enabled>0</enabled>

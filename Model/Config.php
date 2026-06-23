@@ -31,7 +31,7 @@ class Config
     private const XML_REGRESSION_RULES = 'vectorsearch/regression/rules';
     private const XML_QUERY_SYNONYM_RULES = 'vectorsearch/query_normalization/synonym_rules';
     private const XML_QUERY_STOP_WORDS = 'vectorsearch/query_normalization/stop_words';
-    private const XML_COLOR_INTENT_RULES = 'vectorsearch/attribute_intent/color_rules';
+    private const XML_ATTRIBUTE_INTENT_RULES = 'vectorsearch/attribute_intent/rules';
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig
@@ -229,8 +229,8 @@ class Config
         return trim((string)$this->scopeConfig->getValue(self::XML_QUERY_STOP_WORDS));
     }
 
-    public function getColorIntentRules(): string
+    public function getAttributeIntentRules(): string
     {
-        return trim((string)$this->scopeConfig->getValue(self::XML_COLOR_INTENT_RULES));
+        return trim((string)$this->scopeConfig->getValue(self::XML_ATTRIBUTE_INTENT_RULES));
     }
 }
