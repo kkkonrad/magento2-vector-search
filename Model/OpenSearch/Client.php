@@ -6,6 +6,7 @@ namespace Kkkonrad\VectorSearch\Model\OpenSearch;
 use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
+use Kkkonrad\VectorSearch\Model\Search\ColorIntentResolver;
 use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
 use Kkkonrad\VectorSearch\Model\Search\ProductIntentResolver;
 use Kkkonrad\VectorSearch\Model\Search\RerankingCircuitBreaker;
@@ -26,6 +27,7 @@ class Client
     private ?SearchDiagnostics $fallbackDiagnostics = null;
     private ?ProductIntentResolver $fallbackProductIntentResolver = null;
     private ?RerankingCircuitBreaker $fallbackRerankingCircuitBreaker = null;
+    private ?ColorIntentResolver $fallbackColorIntentResolver = null;
 
     public function __construct(
         private readonly Config                  $config,
@@ -35,7 +37,8 @@ class Client
         private readonly \Kkkonrad\VectorSearch\Model\EmbeddingClient $embeddingClient,
         private readonly ?SearchDiagnostics      $searchDiagnostics = null,
         private readonly ?ProductIntentResolver  $productIntentResolver = null,
-        private readonly ?RerankingCircuitBreaker $rerankingCircuitBreaker = null
+        private readonly ?RerankingCircuitBreaker $rerankingCircuitBreaker = null,
+        private readonly ?ColorIntentResolver $colorIntentResolver = null
     ) {}
 
     public function __destruct()
@@ -602,9 +605,15 @@ class Client
             $remainingHits = array_slice($hits, $rerankLimit);
             $productIntent = $this->productIntentResolver()->resolve($queryText);
             $productIntentTerms = $productIntent['terms'];
+            $colorIntent = $this->colorIntentResolver()->resolve($queryText);
+            $colorIntentTerms = $colorIntent['terms'];
             $this->diagnostics()->event('product_intent_detected', [
                 'group' => $productIntent['name'],
                 'terms' => $productIntentTerms,
+            ]);
+            $this->diagnostics()->event('color_intent_detected', [
+                'group' => $colorIntent['name'],
+                'terms' => $colorIntentTerms,
             ]);
 
             $documents = [];
@@ -670,7 +679,8 @@ class Client
                     }
 
                     $relevantIds = [];
-                    $poorIds     = [];
+                    $poorIds = [];
+                    $colorMismatchedPoorIds = [];
                     $rerankedDiagnostics = [];
                     foreach ($ranked as $i => $item) {
                         $id = (int)($item['id'] ?? 0);
@@ -679,12 +689,20 @@ class Client
                             $sourceById[$id] ?? ['embedding_text' => $documentTextsById[$id] ?? ''],
                             $productIntentTerms
                         );
+                        $matchesColorIntent = $this->colorIntentResolver()->matchesSource(
+                            $sourceById[$id] ?? [],
+                            $colorIntentTerms
+                        );
                         // Apply the product intent guard, the gap-cut and the absolute config floor.
-                        if ($matchesProductIntent && $i <= $cutAfter && $score >= $configMinScore) {
+                        if ($matchesProductIntent && $matchesColorIntent && $i <= $cutAfter && $score >= $configMinScore) {
                             $relevantIds[] = $id;
                             $decision = 'relevant';
                         } else {
-                            $poorIds[] = $id;
+                            if (!$matchesColorIntent && !empty($colorIntentTerms)) {
+                                $colorMismatchedPoorIds[] = $id;
+                            } else {
+                                $poorIds[] = $id;
+                            }
                             $decision = 'demoted';
                         }
 
@@ -693,6 +711,7 @@ class Client
                                 'id' => $id,
                                 'score' => $score,
                                 'matches_intent' => $matchesProductIntent,
+                                'matches_color' => $matchesColorIntent,
                                 'decision' => $decision,
                             ];
                         }
@@ -703,7 +722,10 @@ class Client
                     foreach ($remainingHits as $hit) {
                         $src = $hit['_source'] ?? [];
                         $id = (int)($src['entity_id'] ?? 0);
-                        if ($this->productIntentResolver()->matchesSource($src, $productIntentTerms)) {
+                        if (
+                            $this->productIntentResolver()->matchesSource($src, $productIntentTerms)
+                            && $this->colorIntentResolver()->matchesSource($src, $colorIntentTerms)
+                        ) {
                             $remainingRelevantIds[] = $id;
                         } else {
                             $remainingPoorIds[] = $id;
@@ -714,6 +736,7 @@ class Client
                         $relevantIds,
                         $remainingRelevantIds,
                         $poorIds,
+                        $colorMismatchedPoorIds,
                         $remainingPoorIds
                     )));
                     $this->diagnostics()->event('reranking_result', [
@@ -723,6 +746,7 @@ class Client
                         'reranked' => $rerankedDiagnostics,
                         'relevant_count' => count($relevantIds),
                         'demoted_count' => count($poorIds),
+                        'color_mismatched_demoted_count' => count($colorMismatchedPoorIds),
                         'remaining_relevant_count' => count($remainingRelevantIds),
                         'remaining_demoted_count' => count($remainingPoorIds),
                         'final_top_ids' => array_slice($finalIds, 0, 25),
@@ -802,6 +826,20 @@ class Client
 
         return $this->fallbackRerankingCircuitBreaker
             ??= ObjectManager::getInstance()->get(RerankingCircuitBreaker::class);
+    }
+
+
+    private function colorIntentResolver(): ColorIntentResolver
+    {
+        if ($this->colorIntentResolver !== null) {
+            return $this->colorIntentResolver;
+        }
+
+        try {
+            return ObjectManager::getInstance()->get(ColorIntentResolver::class);
+        } catch (\RuntimeException) {
+            return $this->fallbackColorIntentResolver ??= new ColorIntentResolver($this->config, $this->stemmer);
+        }
     }
 
 

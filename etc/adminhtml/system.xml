@@ -112,7 +112,14 @@
                     <comment>Słowa usuwane z query przed embeddingiem i OpenSearch. Oddziel przecinkami.</comment>
                 </field>
             </group>
-            <group id="diagnostics" translate="label" sortOrder="60" showInDefault="1" showInWebsite="0" showInStore="0">
+            <group id="attribute_intent" translate="label" sortOrder="60" showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Intencje Atrybutów</label>
+                <field id="color_rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Reguły kolorów</label>
+                    <comment><![CDATA[Jedna grupa koloru na linię w formacie <code>blue=niebiesk,niebieski,blue</code>. Jeśli query zawiera kolor, produkty bez tego koloru w <code>attr_color</code> są demotowane po rerankingu.]]></comment>
+                </field>
+            </group>
+            <group id="diagnostics" translate="label" sortOrder="70" showInDefault="1" showInWebsite="0" showInStore="0">
                 <label>Diagnostyka</label>
                 <field id="enabled" translate="label comment" type="select" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Włącz tryb diagnostyczny</label>
@@ -124,7 +131,7 @@
                     <comment>Wymagany token dla publicznego parametru vector_debug_token. Zostawienie pustego tokenu blokuje diagnostykę z frontendu.</comment>
                 </field>
             </group>
-            <group id="regression" translate="label" sortOrder="70" showInDefault="1" showInWebsite="0" showInStore="0">
+            <group id="regression" translate="label" sortOrder="80" showInDefault="1" showInWebsite="0" showInStore="0">
                 <label>Regression Suite</label>
                 <field id="rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Reguły regresji wyników</label>

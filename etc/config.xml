@@ -51,6 +51,17 @@ mata,maty
 klocek,blok]]></synonym_rules>
                 <stop_words>dla,do,z,ze,i,w,we,na,o,od,po,pod,nad,oraz</stop_words>
             </query_normalization>
+            <attribute_intent>
+                <color_rules><![CDATA[blue=niebiesk,niebieski,niebieskie,blue
+black=czarn,czarne,czarny,black
+red=czerwon,czerwone,czerwony,red
+green=zielon,zielone,zielony,green
+yellow=żółt,zolt,żółty,zolty,yellow
+purple=fiolet,fioletowy,purple
+gray=szar,szare,szary,grey,gray
+orange=pomarańcz,pomarancz,pomarańczowy,pomaranczowy,orange
+white=biał,bial,biały,bialy,white]]></color_rules>
+            </attribute_intent>
             <diagnostics>
                 <enabled>0</enabled>
                 <token></token>
@@ -65,7 +76,7 @@ koszulka damska | store=1 | limit=72 | min_results=12 | must_top=1540:3,1444:5
 legginsy damskie | store=1 | limit=72 | min_results=12 | must_top=1868:3,1854:5
 butelka na wodę | store=1 | limit=72 | min_results=8 | must_top=15:3
 zegarek damski | store=1 | limit=72 | min_results=8 | must_top=41:3,42:5
-niebieskie szorty | store=1 | limit=72 | min_results=12 | must_top=1002:3,963:5 | must_not_top=41:10
+niebieskie szorty | store=1 | limit=72 | min_results=12 | must_top=1002:3,963:5,950:8 | must_not_top=41:10,1919:3
 czarne spodnie męskie | store=1 | limit=72 | min_results=12 | must_top=841:3,880:5 | must_not_top=41:10]]></rules>
             </regression>
         </vectorsearch>
