@@ -82,7 +82,8 @@ class VectorSearchService
         string $queryText,
         int $storeId,
         array $criteriaFilters = [],
-        ?int $requestedLimit = null
+        ?int $requestedLimit = null,
+        bool $allowReranking = true
     ): array {
         $queryText = trim($queryText);
         if ($queryText === '') {
@@ -104,13 +105,14 @@ class VectorSearchService
         $filterHash = md5((string)json_encode($criteriaFilters));
         $modelName = $this->embeddingClient->getModelName();
         $indexVersion = $this->getIndexVersion();
-        $cacheKey = implode(':', [$storeId, $queryText, $filterHash, $modelName, $limit, $indexVersion]);
+        $cacheKey = implode(':', [$storeId, $queryText, $filterHash, $modelName, $limit, $indexVersion, $allowReranking ? 'rerank' : 'fast']);
         $this->diagnostics()->set('service', [
             'limit' => $limit,
             'filter_hash' => $filterHash,
             'model' => $modelName,
             'index_version' => $indexVersion,
             'cache_enabled' => $this->isCacheEnabled(),
+            'allow_reranking' => $allowReranking,
         ]);
 
         if (array_key_exists($cacheKey, self::$idsProcessCache)) {
@@ -148,7 +150,8 @@ class VectorSearchService
             $vector,
             $limit,
             $storeId,
-            $criteriaFilters
+            $criteriaFilters,
+            $allowReranking
         );
         $this->diagnostics()->timing('opensearch_search', $startedAt);
         $this->diagnostics()->event('entity_ids_search_result', [

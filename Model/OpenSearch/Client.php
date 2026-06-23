@@ -418,7 +418,8 @@ class Client
         array $vector,
         int $size = 20,
         int $storeId = 1,
-        array $criteriaFilters = []
+        array $criteriaFilters = [],
+        bool $allowReranking = true
     ): array {
         $filters = [
             ['term'  => ['status'     => 1]],
@@ -595,7 +596,8 @@ class Client
         $minScore = 1.0 / (2.0 - $minSimilarity);
 
         $searchType = $this->config->getOpenSearchSearchType();
-        $sourceFields = $this->config->isRerankingEnabled() || $this->diagnostics()->isActive()
+        $rerankingEnabled = $allowReranking && $this->config->isRerankingEnabled();
+        $sourceFields = $rerankingEnabled || $this->diagnostics()->isActive()
             ? ['entity_id', 'sku', 'name', 'description', 'category_ids', 'category_names', 'attr_*', 'embedding_text']
             : ['entity_id'];
         $this->diagnostics()->set('opensearch', [
@@ -604,7 +606,7 @@ class Client
             'min_similarity' => $minSimilarity,
             'min_score' => $minScore,
             'filters_count' => count($filters),
-            'reranking_enabled' => $this->config->isRerankingEnabled(),
+            'reranking_enabled' => $rerankingEnabled,
             'reranking_limit' => $this->config->getRerankingLimit(),
         ]);
 
@@ -681,7 +683,7 @@ class Client
             $hits
         );
 
-        if ($this->config->isRerankingEnabled() && !empty($hits)) {
+        if ($rerankingEnabled && !empty($hits)) {
             $rerankLimit = $this->config->getRerankingLimit();
             $candidatesToRerank = array_slice($hits, 0, $rerankLimit);
             $remainingHits = array_slice($hits, $rerankLimit);

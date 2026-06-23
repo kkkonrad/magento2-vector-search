@@ -1,0 +1,28 @@
+<?php
+/** @var \Magento\Framework\View\Element\Template $block */
+/** @var \Magento\Framework\Escaper $escaper */
+?>
+<script type="text/x-magento-init">
+{
+    "#search": {
+        "Kkkonrad_VectorSearch/js/rich-suggest": {
+            "endpoint": "<?= $escaper->escapeUrl($block->getUrl('vectorsearch/ajax/suggest')) ?>",
+            "searchInput": "#search",
+            "form": "#search_mini_form",
+            "nativeAutocomplete": "#search_autocomplete",
+            "minLength": 2,
+            "suggestionDelay": 1000,
+            "labels": {
+                "searchSuggestions": "<?= $escaper->escapeJs((string)__('Search suggestions')) ?>",
+                "bestMatches": "<?= $escaper->escapeJs((string)__('Best matches')) ?>",
+                "showAll": "<?= $escaper->escapeJs((string)__('Show all')) ?>",
+                "suggestedPhrases": "<?= $escaper->escapeJs((string)__('Suggested phrases')) ?>",
+                "categories": "<?= $escaper->escapeJs((string)__('Categories')) ?>",
+                "products": "<?= $escaper->escapeJs((string)__('Products')) ?>",
+                "category": "<?= $escaper->escapeJs((string)__('Category')) ?>",
+                "searching": "<?= $escaper->escapeJs((string)__('Searching...')) ?>"
+            }
+        }
+    }
+}
+</script>
