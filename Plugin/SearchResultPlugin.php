@@ -3,13 +3,16 @@ declare(strict_types=1);
 
 namespace Kkkonrad\VectorSearch\Plugin;
 
+use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\Search\RequestSearchResultStorage;
+use Kkkonrad\VectorSearch\Model\Search\SearchDiagnostics;
 use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\Framework\Api\Search\DocumentFactory;
 use Magento\Framework\Api\Search\SearchCriteriaInterface;
 use Magento\Framework\Api\Search\SearchResultInterface;
 use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\RequestInterface;
+use Magento\Framework\App\ResponseInterface;
 use Magento\Search\Api\SearchInterface;
 use Magento\Store\Model\StoreManagerInterface;
 use Psr\Log\LoggerInterface;
@@ -26,7 +29,10 @@ class SearchResultPlugin
         private readonly LoggerInterface $logger,
         private readonly DocumentFactory $documentFactory,
         private readonly ?VectorSearchService $vectorSearchService = null,
-        private readonly ?RequestSearchResultStorage $requestSearchResultStorage = null
+        private readonly ?RequestSearchResultStorage $requestSearchResultStorage = null,
+        private readonly ?Config $config = null,
+        private readonly ?SearchDiagnostics $searchDiagnostics = null,
+        private readonly ?ResponseInterface $response = null
     ) {}
 
     /**
@@ -53,12 +59,14 @@ class SearchResultPlugin
             $pageSize = (int)($searchCriteria->getPageSize() ?: 0);
             $currentPage = max(1, (int)($searchCriteria->getCurrentPage() ?: 1));
             $requestedLimit = $this->calculateRequestedLimit($pageSize, $currentPage);
+            $this->startDiagnostics($queryText, $storeId, $criteriaFilters, $requestedLimit, $pageSize, $currentPage);
             $entityIds = $service->getEntityIds($queryText, $storeId, $criteriaFilters, $requestedLimit);
 
             if (empty($entityIds)) {
                 $this->markSearchHandled($queryText, $storeId, []);
                 $result->setItems([]);
                 $result->setTotalCount(0);
+                $this->finishDiagnostics($entityIds, []);
                 return $result;
             }
 
@@ -79,6 +87,7 @@ class SearchResultPlugin
 
             $result->setItems($documents);
             $result->setTotalCount($totalCount);
+            $this->finishDiagnostics($entityIds, $pageIds);
 
             $this->logger->debug(
                 '[VectorSearch] Injected ' . count($documents) . '/' . $totalCount
@@ -104,6 +113,82 @@ class SearchResultPlugin
     {
         return $this->requestSearchResultStorage
             ?? ObjectManager::getInstance()->get(RequestSearchResultStorage::class);
+    }
+
+
+    /**
+     * @param array<int, array{field: string, value: mixed}> $criteriaFilters
+     */
+    private function startDiagnostics(
+        string $queryText,
+        int $storeId,
+        array $criteriaFilters,
+        ?int $requestedLimit,
+        int $pageSize,
+        int $currentPage
+    ): void {
+        $config = $this->getConfig();
+        if (!$config->isDiagnosticsEnabled()) {
+            return;
+        }
+
+        $configuredToken = $config->getDiagnosticsToken();
+        $requestToken = (string)$this->request->getParam('vector_debug_token', '');
+        if ($configuredToken === '' || !hash_equals($configuredToken, $requestToken)) {
+            return;
+        }
+
+        if ((string)$this->request->getParam('vector_debug', '') !== '1') {
+            return;
+        }
+
+        $this->getSearchDiagnostics()->start(
+            $queryText,
+            $storeId,
+            $criteriaFilters,
+            $requestedLimit,
+            $pageSize,
+            $currentPage
+        );
+    }
+
+
+    /**
+     * @param int[] $entityIds
+     * @param int[] $pageIds
+     */
+    private function finishDiagnostics(array $entityIds, array $pageIds): void
+    {
+        $diagnostics = $this->getSearchDiagnostics();
+        if (!$diagnostics->isActive()) {
+            return;
+        }
+
+        $diagnostics->set('total_count', count($entityIds));
+        $diagnostics->set('top_ids', array_slice($entityIds, 0, 25));
+        $diagnostics->set('page_ids', $pageIds);
+        $diagnostics->flush($this->logger, $this->getResponse());
+    }
+
+
+    private function getConfig(): Config
+    {
+        return $this->config
+            ?? ObjectManager::getInstance()->get(Config::class);
+    }
+
+
+    private function getSearchDiagnostics(): SearchDiagnostics
+    {
+        return $this->searchDiagnostics
+            ?? ObjectManager::getInstance()->get(SearchDiagnostics::class);
+    }
+
+
+    private function getResponse(): ?ResponseInterface
+    {
+        return $this->response
+            ?? ObjectManager::getInstance()->get(ResponseInterface::class);
     }
 
 

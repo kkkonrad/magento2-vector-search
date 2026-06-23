@@ -7,6 +7,10 @@ use Psr\Log\LoggerInterface;
 use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\AttributeWeightProvider;
 use Kkkonrad\VectorSearch\Model\Search\PolishStemmer;
+use Kkkonrad\VectorSearch\Model\Search\ProductIntentResolver;
+use Kkkonrad\VectorSearch\Model\Search\RerankingCircuitBreaker;
+use Kkkonrad\VectorSearch\Model\Search\SearchDiagnostics;
+use Magento\Framework\App\ObjectManager;
 
 /**
  * Lightweight OpenSearch HTTP client (no SDK dependency).
@@ -19,13 +23,19 @@ class Client
     private ?string $version = null;
 
     private ?\CurlHandle $curlHandle = null;
+    private ?SearchDiagnostics $fallbackDiagnostics = null;
+    private ?ProductIntentResolver $fallbackProductIntentResolver = null;
+    private ?RerankingCircuitBreaker $fallbackRerankingCircuitBreaker = null;
 
     public function __construct(
         private readonly Config                  $config,
         private readonly LoggerInterface         $logger,
         private readonly AttributeWeightProvider $weightProvider,
         private readonly PolishStemmer           $stemmer,
-        private readonly \Kkkonrad\VectorSearch\Model\EmbeddingClient $embeddingClient
+        private readonly \Kkkonrad\VectorSearch\Model\EmbeddingClient $embeddingClient,
+        private readonly ?SearchDiagnostics      $searchDiagnostics = null,
+        private readonly ?ProductIntentResolver  $productIntentResolver = null,
+        private readonly ?RerankingCircuitBreaker $rerankingCircuitBreaker = null
     ) {}
 
     public function __destruct()
@@ -251,6 +261,7 @@ class Client
                         'sku'                 => ['type' => 'keyword'],
                         'store_id'            => ['type' => 'integer'],
                         'category_ids'        => ['type' => 'integer'],
+                        'category_names'      => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
                         'name'                => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
                         'description'         => ['type' => 'text', 'analyzer' => 'polish_asciifolding'],
                         'status'              => ['type' => 'integer'],
@@ -499,7 +510,18 @@ class Client
         $minScore = 1.0 / (2.0 - $minSimilarity);
 
         $searchType = $this->config->getOpenSearchSearchType();
-        $sourceFields = $this->config->isRerankingEnabled() ? ['entity_id', 'embedding_text'] : ['entity_id'];
+        $sourceFields = $this->config->isRerankingEnabled() || $this->diagnostics()->isActive()
+            ? ['entity_id', 'sku', 'name', 'description', 'category_ids', 'category_names', 'attr_*', 'embedding_text']
+            : ['entity_id'];
+        $this->diagnostics()->set('opensearch', [
+            'search_type' => $searchType,
+            'requested_size' => $size,
+            'min_similarity' => $minSimilarity,
+            'min_score' => $minScore,
+            'filters_count' => count($filters),
+            'reranking_enabled' => $this->config->isRerankingEnabled(),
+            'reranking_limit' => $this->config->getRerankingLimit(),
+        ]);
 
         if ($searchType === 'pure_knn' || $searchType === 'knn') {
             // Pure kNN semantic search (ignores lexical shouldClauses).
@@ -556,6 +578,11 @@ class Client
 
         $response = $this->request('POST', '/' . $this->indexName() . '/_search', $query);
         $hits     = $response['hits']['hits'] ?? [];
+        $this->diagnostics()->event('opensearch_raw_hits', [
+            'total' => $response['hits']['total']['value'] ?? null,
+            'returned' => count($hits),
+            'top' => $this->summarizeHits($hits, 15),
+        ]);
 
         if ($searchType !== 'hybrid') {
             $hits = array_filter(
@@ -573,10 +600,16 @@ class Client
             $rerankLimit = $this->config->getRerankingLimit();
             $candidatesToRerank = array_slice($hits, 0, $rerankLimit);
             $remainingHits = array_slice($hits, $rerankLimit);
-            $productIntentTerms = $this->getProductIntentTerms($queryText);
+            $productIntent = $this->productIntentResolver()->resolve($queryText);
+            $productIntentTerms = $productIntent['terms'];
+            $this->diagnostics()->event('product_intent_detected', [
+                'group' => $productIntent['name'],
+                'terms' => $productIntentTerms,
+            ]);
 
             $documents = [];
             $documentTextsById = [];
+            $sourceById = [];
             foreach ($candidatesToRerank as $hit) {
                 $src = $hit['_source'] ?? [];
                 $id = (int)($src['entity_id'] ?? 0);
@@ -586,11 +619,21 @@ class Client
                     'text' => $text
                 ];
                 $documentTextsById[$id] = $text;
+                $sourceById[$id] = $src;
+            }
+
+            if (!$this->rerankingCircuitBreaker()->canAttempt()) {
+                $this->diagnostics()->event('reranking_circuit_open');
+                $this->logger->warning('[VectorSearch] Reranking skipped because circuit breaker is open.');
+                return $entityIds;
             }
 
             try {
+                $startedAt = microtime(true);
                 $ranked = $this->embeddingClient->rerank($queryText, $documents);
+                $this->diagnostics()->timing('reranker', $startedAt);
                 if (!empty($ranked)) {
+                    $this->rerankingCircuitBreaker()->recordSuccess();
                     // Find the largest relative score drop between consecutive reranker results.
                     // This approach works for both positive-score models (ms-marco-TinyBERT) and
                     // negative-score models (bge-reranker-base) where a percentage of max is broken.
@@ -628,18 +671,30 @@ class Client
 
                     $relevantIds = [];
                     $poorIds     = [];
+                    $rerankedDiagnostics = [];
                     foreach ($ranked as $i => $item) {
                         $id = (int)($item['id'] ?? 0);
                         $score = (float)($item['score'] ?? 0.0);
-                        $matchesProductIntent = $this->matchesProductIntent(
-                            $documentTextsById[$id] ?? '',
+                        $matchesProductIntent = $this->productIntentResolver()->matchesSource(
+                            $sourceById[$id] ?? ['embedding_text' => $documentTextsById[$id] ?? ''],
                             $productIntentTerms
                         );
                         // Apply the product intent guard, the gap-cut and the absolute config floor.
                         if ($matchesProductIntent && $i <= $cutAfter && $score >= $configMinScore) {
                             $relevantIds[] = $id;
+                            $decision = 'relevant';
                         } else {
                             $poorIds[] = $id;
+                            $decision = 'demoted';
+                        }
+
+                        if (count($rerankedDiagnostics) < 25) {
+                            $rerankedDiagnostics[] = [
+                                'id' => $id,
+                                'score' => $score,
+                                'matches_intent' => $matchesProductIntent,
+                                'decision' => $decision,
+                            ];
                         }
                     }
 
@@ -648,91 +703,105 @@ class Client
                     foreach ($remainingHits as $hit) {
                         $src = $hit['_source'] ?? [];
                         $id = (int)($src['entity_id'] ?? 0);
-                        $text = mb_substr((string)($src['embedding_text'] ?? ''), 0, 1000);
-
-                        if ($this->matchesProductIntent($text, $productIntentTerms)) {
+                        if ($this->productIntentResolver()->matchesSource($src, $productIntentTerms)) {
                             $remainingRelevantIds[] = $id;
                         } else {
                             $remainingPoorIds[] = $id;
                         }
                     }
 
-                    // Order: good reranked → matching OpenSearch hits → demoted reranked → non-matching hits.
-                    return array_values(array_unique(array_merge(
+                    $finalIds = array_values(array_unique(array_merge(
                         $relevantIds,
                         $remainingRelevantIds,
                         $poorIds,
                         $remainingPoorIds
                     )));
+                    $this->diagnostics()->event('reranking_result', [
+                        'score_range' => $scoreRange,
+                        'cut_after' => $cutAfter,
+                        'config_min_score' => $configMinScore,
+                        'reranked' => $rerankedDiagnostics,
+                        'relevant_count' => count($relevantIds),
+                        'demoted_count' => count($poorIds),
+                        'remaining_relevant_count' => count($remainingRelevantIds),
+                        'remaining_demoted_count' => count($remainingPoorIds),
+                        'final_top_ids' => array_slice($finalIds, 0, 25),
+                    ]);
+
+                    // Order: good reranked → matching OpenSearch hits → demoted reranked → non-matching hits.
+                    return $finalIds;
                 }
             } catch (\Throwable $e) {
+                $this->rerankingCircuitBreaker()->recordFailure($e->getMessage());
+                $this->diagnostics()->event('reranking_failed', [
+                    'message' => $e->getMessage(),
+                ]);
                 $this->logger->error('[VectorSearch] Reranking failed during search, falling back to OpenSearch order: ' . $e->getMessage());
             }
         }
 
+        $this->diagnostics()->event('opensearch_final_without_reranking', [
+            'top_ids' => array_slice($entityIds, 0, 25),
+        ]);
         return $entityIds;
     }
 
     /**
-     * Detects concrete product-type intent in a query.
-     *
-     * Rerankers can overvalue broad modifiers such as "dla kobiet" and promote
-     * accessories above the requested product type. When a query clearly names a
-     * product family, candidates from other families are demoted after reranking.
-     *
-     * @return string[]
+     * @param array<int, array<string, mixed>> $hits
+     * @return array<int, array<string, mixed>>
      */
-    private function getProductIntentTerms(string $queryText): array
+    private function summarizeHits(array $hits, int $limit): array
     {
-        $stemmedQuery = $this->stemmer->stemText($queryText);
-
-        $groups = [
-            ['spodn', 'leggins', 'rybacz', 'capri'],
-            ['szort', 'spoden'],
-            ['koszulk', 'shirt', 't-shirt', 'bez rękaw', 'bez rekaw', 'tank'],
-            ['kurtk', 'jacket'],
-            ['bluz', 'hoodie'],
-            ['stanik', 'biustonosz', 'bra'],
-            ['but', 'shoe'],
-            ['torb', 'plecak', 'bag', 'backpack'],
-            ['butelk', 'bidon'],
-            ['mat'],
-            ['piłk', 'pilk', 'ball'],
-            ['klocek', 'blok', 'block'],
-            ['zegar', 'zegarek', 'watch'],
-        ];
-
-        foreach ($groups as $terms) {
-            foreach ($terms as $term) {
-                if (mb_stripos($stemmedQuery, $term) !== false) {
-                    return $terms;
-                }
-            }
+        $summary = [];
+        foreach (array_slice($hits, 0, $limit) as $hit) {
+            $src = $hit['_source'] ?? [];
+            $summary[] = [
+                'id' => (int)($src['entity_id'] ?? 0),
+                'score' => isset($hit['_score']) ? (float)$hit['_score'] : null,
+                'sku' => (string)($src['sku'] ?? ''),
+                'name' => (string)($src['name'] ?? ''),
+            ];
         }
 
-        return [];
+        return $summary;
     }
 
-    /**
-     * Returns true when no concrete product intent was detected, or when the
-     * candidate text contains at least one term from the detected product family.
-     *
-     * @param string[] $intentTerms
-     */
-    private function matchesProductIntent(string $documentText, array $intentTerms): bool
+    private function diagnostics(): SearchDiagnostics
     {
-        if (empty($intentTerms)) {
-            return true;
+        if ($this->searchDiagnostics !== null) {
+            return $this->searchDiagnostics;
         }
 
-        $stemmedText = $this->stemmer->stemText($documentText);
-        foreach ($intentTerms as $term) {
-            if (mb_stripos($stemmedText, $term) !== false) {
-                return true;
-            }
+        try {
+            return ObjectManager::getInstance()->get(SearchDiagnostics::class);
+        } catch (\RuntimeException) {
+            return $this->fallbackDiagnostics ??= new SearchDiagnostics();
+        }
+    }
+
+
+    private function productIntentResolver(): ProductIntentResolver
+    {
+        if ($this->productIntentResolver !== null) {
+            return $this->productIntentResolver;
         }
 
-        return false;
+        try {
+            return ObjectManager::getInstance()->get(ProductIntentResolver::class);
+        } catch (\RuntimeException) {
+            return $this->fallbackProductIntentResolver ??= new ProductIntentResolver($this->config, $this->stemmer);
+        }
+    }
+
+
+    private function rerankingCircuitBreaker(): RerankingCircuitBreaker
+    {
+        if ($this->rerankingCircuitBreaker !== null) {
+            return $this->rerankingCircuitBreaker;
+        }
+
+        return $this->fallbackRerankingCircuitBreaker
+            ??= ObjectManager::getInstance()->get(RerankingCircuitBreaker::class);
     }
 
 

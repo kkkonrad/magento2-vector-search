@@ -21,4 +21,15 @@
                 type="Kkkonrad\VectorSearch\Plugin\SearchResultPlugin"
                 sortOrder="10"/>
     </type>
+
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="kkkonrad_vectorsearch_regression"
+                      xsi:type="object">Kkkonrad\VectorSearch\Console\Command\SearchRegressionCommand</item>
+                <item name="kkkonrad_vectorsearch_explain"
+                      xsi:type="object">Kkkonrad\VectorSearch\Console\Command\SearchExplainCommand</item>
+            </argument>
+        </arguments>
+    </type>
 </config>

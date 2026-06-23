@@ -22,6 +22,15 @@ class Config
     private const XML_RERANKING_ENABLED = 'vectorsearch/reranking/enabled';
     private const XML_RERANKING_LIMIT = 'vectorsearch/reranking/limit';
     private const XML_RERANKING_MIN_SCORE = 'vectorsearch/reranking/min_score';
+    private const XML_RERANKING_TIMEOUT_MS = 'vectorsearch/reranking/timeout_ms';
+    private const XML_RERANKING_CIRCUIT_FAILURE_THRESHOLD = 'vectorsearch/reranking/circuit_failure_threshold';
+    private const XML_RERANKING_CIRCUIT_COOLDOWN_SECONDS = 'vectorsearch/reranking/circuit_cooldown_seconds';
+    private const XML_DIAGNOSTICS_ENABLED = 'vectorsearch/diagnostics/enabled';
+    private const XML_DIAGNOSTICS_TOKEN = 'vectorsearch/diagnostics/token';
+    private const XML_PRODUCT_INTENT_RULES = 'vectorsearch/product_intent/rules';
+    private const XML_REGRESSION_RULES = 'vectorsearch/regression/rules';
+    private const XML_QUERY_SYNONYM_RULES = 'vectorsearch/query_normalization/synonym_rules';
+    private const XML_QUERY_STOP_WORDS = 'vectorsearch/query_normalization/stop_words';
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig
@@ -170,5 +179,52 @@ class Config
         $val = $this->scopeConfig->getValue(self::XML_RERANKING_MIN_SCORE);
         return $val !== null && $val !== '' ? (float)$val : 0.0;
     }
-}
 
+    public function getRerankingTimeoutMs(): int
+    {
+        $val = $this->scopeConfig->getValue(self::XML_RERANKING_TIMEOUT_MS);
+        return max(100, $val !== null && $val !== '' ? (int)$val : 5000);
+    }
+
+    public function getRerankingCircuitFailureThreshold(): int
+    {
+        $val = $this->scopeConfig->getValue(self::XML_RERANKING_CIRCUIT_FAILURE_THRESHOLD);
+        return max(1, $val !== null && $val !== '' ? (int)$val : 3);
+    }
+
+    public function getRerankingCircuitCooldownSeconds(): int
+    {
+        $val = $this->scopeConfig->getValue(self::XML_RERANKING_CIRCUIT_COOLDOWN_SECONDS);
+        return max(1, $val !== null && $val !== '' ? (int)$val : 60);
+    }
+
+    public function isDiagnosticsEnabled(): bool
+    {
+        return $this->scopeConfig->isSetFlag(self::XML_DIAGNOSTICS_ENABLED);
+    }
+
+    public function getDiagnosticsToken(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_DIAGNOSTICS_TOKEN));
+    }
+
+    public function getProductIntentRules(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_PRODUCT_INTENT_RULES));
+    }
+
+    public function getRegressionRules(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_REGRESSION_RULES));
+    }
+
+    public function getQuerySynonymRules(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_QUERY_SYNONYM_RULES));
+    }
+
+    public function getQueryStopWords(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_QUERY_STOP_WORDS));
+    }
+}

@@ -20,13 +20,6 @@ class EmbeddingClient
      */
     private const TIMEOUT_SEARCH = 3;
 
-    /**
-     * Timeout for cross-encoder reranking calls (up to 20 documents).
-     * bge-reranker-base on CPU takes ~3s for 20 docs — 15s gives ample headroom
-     * while still being responsive for end-users.
-     */
-    private const TIMEOUT_RERANK = 15;
-
     private ?\CurlHandle $curlHandle = null;
 
     public function __construct(
@@ -198,10 +191,9 @@ class EmbeddingClient
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        // Cross-encoder reranking with 20 docs on CPU takes ~3s in the service;
-        // PHP overhead brings it close to or over the 5s (TIMEOUT_SEARCH+2) limit.
-        // Use a dedicated longer timeout for reranking.
-        curl_setopt($ch, CURLOPT_TIMEOUT, self::TIMEOUT_RERANK);
+        $timeoutMs = $this->config->getRerankingTimeoutMs();
+        curl_setopt($ch, CURLOPT_TIMEOUT_MS, $timeoutMs);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT_MS, min(1000, $timeoutMs));
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Content-Type: application/json',
             'Accept: application/json'
@@ -212,13 +204,13 @@ class EmbeddingClient
         if ($body === false) {
             $error = curl_error($ch);
             $this->logger->error('[VectorSearch] Reranking failed: ' . $error);
-            return [];
+            throw new \RuntimeException('Reranking service unavailable: ' . $error);
         }
 
         $data = json_decode((string)$body, true);
         if (!isset($data['ranked']) || !is_array($data['ranked'])) {
             $this->logger->error('[VectorSearch] Invalid reranking response: ' . $body);
-            return [];
+            throw new \RuntimeException('Invalid response from reranking service');
         }
 
         return $data['ranked'];

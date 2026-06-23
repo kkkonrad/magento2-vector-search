@@ -9,6 +9,7 @@ use Kkkonrad\VectorSearch\Model\EmbeddingClient;
 use Kkkonrad\VectorSearch\Model\OpenSearch\Client as OpenSearchClient;
 use Magento\Framework\App\Cache\StateInterface;
 use Magento\Framework\App\CacheInterface;
+use Magento\Framework\App\ObjectManager;
 use Psr\Log\LoggerInterface;
 
 class VectorSearchService
@@ -26,13 +27,18 @@ class VectorSearchService
      */
     private static array $vectorProcessCache = [];
 
+    private ?SearchDiagnostics $fallbackDiagnostics = null;
+    private ?QueryNormalizer $fallbackQueryNormalizer = null;
+
     public function __construct(
         private readonly EmbeddingClient $embeddingClient,
         private readonly OpenSearchClient $openSearchClient,
         private readonly CacheInterface $cache,
         private readonly StateInterface $cacheState,
         private readonly Config $config,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly ?SearchDiagnostics $searchDiagnostics = null,
+        private readonly ?QueryNormalizer $queryNormalizer = null
     ) {}
 
     /**
@@ -47,7 +53,8 @@ class VectorSearchService
             'q', 'p', 'product_list_order', 'product_list_dir',
             'product_list_limit', 'product_list_mode', 'id', 'ajax', 'price',
             'form_key', '___store', '___from_store', 'uenc', 'isAjax',
-            '__vectorsearch_query', '__vectorsearch_store_id', '__vectorsearch_ids'
+            '__vectorsearch_query', '__vectorsearch_store_id', '__vectorsearch_ids',
+            'vector_debug', 'vector_debug_token'
         ];
 
         $filters = [];
@@ -81,15 +88,36 @@ class VectorSearchService
         if ($queryText === '') {
             return [];
         }
+        $originalQueryText = $queryText;
+        $queryText = $this->normalizeQuery($queryText);
+        if ($queryText === '') {
+            return [];
+        }
+        if ($queryText !== $originalQueryText) {
+            $this->diagnostics()->event('query_normalized', [
+                'original' => $originalQueryText,
+                'normalized' => $queryText,
+            ]);
+        }
 
         $limit = $this->resolveSearchLimit($requestedLimit);
         $filterHash = md5((string)json_encode($criteriaFilters));
         $modelName = $this->embeddingClient->getModelName();
         $indexVersion = $this->getIndexVersion();
         $cacheKey = implode(':', [$storeId, $queryText, $filterHash, $modelName, $limit, $indexVersion]);
+        $this->diagnostics()->set('service', [
+            'limit' => $limit,
+            'filter_hash' => $filterHash,
+            'model' => $modelName,
+            'index_version' => $indexVersion,
+            'cache_enabled' => $this->isCacheEnabled(),
+        ]);
 
         if (array_key_exists($cacheKey, self::$idsProcessCache)) {
             $this->logger->debug('[VectorSearch] Entity ID process-cache hit for: ' . $queryText);
+            $this->diagnostics()->event('entity_ids_process_cache_hit', [
+                'count' => count(self::$idsProcessCache[$cacheKey]),
+            ]);
             return self::$idsProcessCache[$cacheKey];
         }
 
@@ -100,15 +128,21 @@ class VectorSearchService
             if ($cached !== false) {
                 $ids = $this->decodeIntArray((string)$cached);
                 $this->logger->debug('[VectorSearch] Entity ID Magento-cache hit for: ' . $queryText);
+                $this->diagnostics()->event('entity_ids_magento_cache_hit', [
+                    'count' => count($ids),
+                ]);
                 return self::$idsProcessCache[$cacheKey] = $ids;
             }
         }
 
+        $this->diagnostics()->event('entity_ids_cache_miss');
         $vector = $this->getQueryVector($queryText, $modelName);
         if (empty($vector)) {
+            $this->diagnostics()->event('empty_query_vector');
             return self::$idsProcessCache[$cacheKey] = [];
         }
 
+        $startedAt = microtime(true);
         $ids = $this->openSearchClient->hybridSearch(
             $queryText,
             $vector,
@@ -116,6 +150,11 @@ class VectorSearchService
             $storeId,
             $criteriaFilters
         );
+        $this->diagnostics()->timing('opensearch_search', $startedAt);
+        $this->diagnostics()->event('entity_ids_search_result', [
+            'count' => count($ids),
+            'top_ids' => array_slice($ids, 0, 25),
+        ]);
 
         self::$idsProcessCache[$cacheKey] = $ids;
         if ($cacheEnabled) {
@@ -172,6 +211,9 @@ class VectorSearchService
         $cacheKey = $modelName . ':query:' . $queryText;
         if (array_key_exists($cacheKey, self::$vectorProcessCache)) {
             $this->logger->debug('[VectorSearch] Query vector process-cache hit for: ' . $queryText);
+            $this->diagnostics()->event('query_vector_process_cache_hit', [
+                'dimensions' => count(self::$vectorProcessCache[$cacheKey]),
+            ]);
             return self::$vectorProcessCache[$cacheKey];
         }
 
@@ -183,12 +225,20 @@ class VectorSearchService
                 $vector = $this->decodeFloatArray((string)$cached);
                 if (!empty($vector)) {
                     $this->logger->debug('[VectorSearch] Query vector Magento-cache hit for: ' . $queryText);
+                    $this->diagnostics()->event('query_vector_magento_cache_hit', [
+                        'dimensions' => count($vector),
+                    ]);
                     return self::$vectorProcessCache[$cacheKey] = $vector;
                 }
             }
         }
 
+        $startedAt = microtime(true);
         $vector = $this->embeddingClient->embedOne($queryText, 'query');
+        $this->diagnostics()->timing('query_embedding', $startedAt);
+        $this->diagnostics()->event('query_vector_created', [
+            'dimensions' => count($vector),
+        ]);
         self::$vectorProcessCache[$cacheKey] = $vector;
 
         if ($cacheEnabled && !empty($vector)) {
@@ -201,6 +251,32 @@ class VectorSearchService
         }
 
         return $vector;
+    }
+
+    private function diagnostics(): SearchDiagnostics
+    {
+        if ($this->searchDiagnostics !== null) {
+            return $this->searchDiagnostics;
+        }
+
+        try {
+            return ObjectManager::getInstance()->get(SearchDiagnostics::class);
+        } catch (\RuntimeException) {
+            return $this->fallbackDiagnostics ??= new SearchDiagnostics();
+        }
+    }
+
+    private function normalizeQuery(string $queryText): string
+    {
+        if ($this->queryNormalizer !== null) {
+            return $this->queryNormalizer->normalize($queryText);
+        }
+
+        try {
+            return ObjectManager::getInstance()->get(QueryNormalizer::class)->normalize($queryText);
+        } catch (\RuntimeException) {
+            return $this->fallbackQueryNormalizer?->normalize($queryText) ?? $queryText;
+        }
     }
 
     private function isCacheEnabled(): bool

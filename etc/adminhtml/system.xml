@@ -78,6 +78,58 @@
                     <comment>Absolutny próg score rerankera. Produkty poniżej tego progu są zawsze przenoszone na koniec (np. 0 = wyklucz ujemne wyniki dla bge-reranker, -999 = wyłączone). Główna filtracja odbywa się przez wykrywanie luki w wynikach (35% zakresu).</comment>
                     <validate>validate-number</validate>
                 </field>
+                <field id="timeout_ms" translate="label comment" type="text" sortOrder="50" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Timeout Rerankingu (ms)</label>
+                    <comment>Maksymalny czas oczekiwania na cross-encoder reranker dla jednego zapytania frontendowego. Po timeout search przechodzi na kolejność OpenSearch.</comment>
+                    <validate>validate-digits required-entry</validate>
+                </field>
+                <field id="circuit_failure_threshold" translate="label comment" type="text" sortOrder="60" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Próg błędów Circuit Breakera</label>
+                    <comment>Liczba kolejnych błędów rerankera, po której reranker zostaje tymczasowo pominięty.</comment>
+                    <validate>validate-digits required-entry</validate>
+                </field>
+                <field id="circuit_cooldown_seconds" translate="label comment" type="text" sortOrder="70" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Cooldown Circuit Breakera (s)</label>
+                    <comment>Czas pomijania rerankera po przekroczeniu progu błędów. Po cooldown następuje kolejna próba.</comment>
+                    <validate>validate-digits required-entry</validate>
+                </field>
+            </group>
+            <group id="product_intent" translate="label" sortOrder="40" showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Intencje Produktowe</label>
+                <field id="rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Reguły intencji produktów</label>
+                    <comment><![CDATA[Jedna grupa na linię w formacie <code>nazwa=term1,term2</code>. Jeśli zapytanie pasuje do jednej grupy, wyniki bez tych termów są demotowane po rerankingu. Termy powinny być rdzeniami po stemmingu, np. <code>shorts=szort,spoden</code>.]]></comment>
+                </field>
+            </group>
+            <group id="query_normalization" translate="label" sortOrder="50" showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Normalizacja Query</label>
+                <field id="synonym_rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Synonimy zapytań</label>
+                    <comment><![CDATA[Jedna grupa synonimów na linię, po przecinku. Jeśli query zawiera dowolny termin z grupy, normalizer dopisze pozostałe terminy, np. <code>spodenki,szorty,shorts</code>.]]></comment>
+                </field>
+                <field id="stop_words" translate="label comment" type="text" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Stop words</label>
+                    <comment>Słowa usuwane z query przed embeddingiem i OpenSearch. Oddziel przecinkami.</comment>
+                </field>
+            </group>
+            <group id="diagnostics" translate="label" sortOrder="60" showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Diagnostyka</label>
+                <field id="enabled" translate="label comment" type="select" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Włącz tryb diagnostyczny</label>
+                    <comment>Po włączeniu można uruchomić diagnostykę pojedynczego zapytania przez parametry vector_debug=1 i vector_debug_token. Dane trafiają do logów Magento.</comment>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+                <field id="token" translate="label comment" type="text" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Token diagnostyczny</label>
+                    <comment>Wymagany token dla publicznego parametru vector_debug_token. Zostawienie pustego tokenu blokuje diagnostykę z frontendu.</comment>
+                </field>
+            </group>
+            <group id="regression" translate="label" sortOrder="70" showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Regression Suite</label>
+                <field id="rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Reguły regresji wyników</label>
+                    <comment><![CDATA[Jedna fraza na linię. Format: <code>query | store=1 | limit=72 | min_results=12 | must_top=2040:3 | must_not_top=21:10</code>. <code>must_top=id:pozycja</code> wymaga produktu w top N, a <code>must_not_top=id:pozycja</code> zabrania produktu w top N.]]></comment>
+                </field>
             </group>
         </section>
     </system>

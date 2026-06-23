@@ -352,6 +352,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
                     'sku'                 => (string)($productData['sku'] ?? ''),
                     'store_id'            => $storeId,
                     'category_ids'        => array_map('intval', $categoryIds),
+                    'category_names'      => $this->stemmer->stemText(implode(' ', $categoryNames)),
                     'name'                => $this->stemmer->stemText(explode("\n", $this->docFieldToString($productData['name'] ?? $doc['name'] ?? ''))[0]),
                     'description'         => $this->stemmer->stemText($this->getDocumentDescription($doc, $categoryNames)),
                     'status'              => (int)($productData['status'] ?? 1),

@@ -19,7 +19,55 @@
             <reranking>
                 <enabled>0</enabled>
                 <limit>40</limit>
+                <timeout_ms>5000</timeout_ms>
+                <circuit_failure_threshold>3</circuit_failure_threshold>
+                <circuit_cooldown_seconds>60</circuit_cooldown_seconds>
             </reranking>
+            <product_intent>
+                <rules><![CDATA[pants=spodn,leggins,rybacz,capri
+shorts=szort,spoden
+shirts=koszulk,shirt,t-shirt,bez rękaw,bez rekaw,tank
+jackets=kurtk,jacket
+hoodies=bluz,hoodie
+bras=stanik,biustonosz,bra
+shoes=buty,shoe
+bags=torb,plecak,bag,backpack
+bottles=butel,bidon
+mats=mata
+balls=piłk,pilk,ball
+blocks=kloc,klocek,blok,block
+watches=zegar,zegarek,watch]]></rules>
+            </product_intent>
+            <query_normalization>
+                <synonym_rules><![CDATA[spodenki,szorty,shorts
+spodnie,legginsy,leginsy,rybaczki
+koszulka,koszulki,t-shirt,tee
+bluza,hoodie
+kurtka,jacket
+zegarek,zegarki,watch
+torba,torby,plecak,bag,backpack
+butelka,butelki,bidon
+mata,maty
+klocek,blok]]></synonym_rules>
+                <stop_words>dla,do,z,ze,i,w,we,na,o,od,po,pod,nad,oraz</stop_words>
+            </query_normalization>
+            <diagnostics>
+                <enabled>0</enabled>
+                <token></token>
+            </diagnostics>
+            <regression>
+                <rules><![CDATA[spodenki dla kobiet | store=1 | limit=72 | min_results=12 | must_top=2040:3,1951:5 | must_not_top=21:10,22:10,45:10
+niebieskie spodnie dla kobiet | store=1 | limit=72 | min_results=12 | must_not_top=41:10
+zegarek luma | store=1 | limit=72 | min_results=1 | must_top=41:3
+mata do jogi | store=1 | limit=72 | min_results=12 | must_not_top=40:10,38:10,36:10
+plecak | store=1 | limit=72 | min_results=8 | must_top=2:3,6:5,11:5
+koszulka damska | store=1 | limit=72 | min_results=12 | must_top=1540:3,1444:5
+legginsy damskie | store=1 | limit=72 | min_results=12 | must_top=1868:3,1854:5
+butelka na wodę | store=1 | limit=72 | min_results=8 | must_top=15:3
+zegarek damski | store=1 | limit=72 | min_results=8 | must_top=41:3,42:5
+niebieskie szorty | store=1 | limit=72 | min_results=12 | must_top=1002:3,963:5 | must_not_top=41:10
+czarne spodnie męskie | store=1 | limit=72 | min_results=12 | must_top=841:3,880:5 | must_not_top=41:10]]></rules>
+            </regression>
         </vectorsearch>
     </default>
 </config>
