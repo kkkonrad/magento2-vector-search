@@ -1,9 +1,10 @@
+.page-header .block-search,
 .vectorsearch-rich-block {
     max-width: 640px;
     width: 100%;
 }
 
-.page-header .block-search.vectorsearch-rich-block {
+.page-header .block-search {
     width: min(640px, 58vw);
 }
 
@@ -238,7 +239,7 @@
 }
 
 @media (min-width: 769px) {
-    .page-header .block-search.vectorsearch-rich-block {
+    .page-header .block-search {
         width: min(640px, 58vw);
     }
 
