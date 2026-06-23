@@ -197,6 +197,88 @@ class Client
         return isset($response[$this->indexName()]);
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function getMappingProperties(): array
+    {
+        $response = $this->request('GET', '/' . $this->indexName() . '/_mapping', [], false);
+        return $response[$this->indexName()]['mappings']['properties'] ?? [];
+    }
+
+    /**
+     * @return array{total: int|null, samples: string[]}
+     */
+    public function sampleFieldValues(string $field, int $sampleSize = 5): array
+    {
+        $query = [
+            'size' => max(1, $sampleSize),
+            '_source' => [$field],
+            'query' => [
+                'exists' => [
+                    'field' => $field,
+                ],
+            ],
+        ];
+
+        $response = $this->request('POST', '/' . $this->indexName() . '/_search', $query, false);
+        $samples = [];
+        foreach ($response['hits']['hits'] ?? [] as $hit) {
+            $value = $hit['_source'][$field] ?? null;
+            $text = $this->sampleValueToText($value);
+            if ($text !== '') {
+                $samples[] = $text;
+            }
+        }
+
+        return [
+            'total' => isset($response['hits']['total']['value'])
+                ? (int)$response['hits']['total']['value']
+                : null,
+            'samples' => array_values(array_unique($samples)),
+        ];
+    }
+
+    public function countFieldTermMatches(string $field, array $terms): int
+    {
+        $should = [];
+        foreach ($terms as $term) {
+            $term = trim((string)$term);
+            if ($term === '') {
+                continue;
+            }
+
+            $should[] = [
+                'match' => [
+                    $field => [
+                        'query' => $term,
+                        'operator' => 'and',
+                    ],
+                ],
+            ];
+        }
+
+        if (empty($should)) {
+            return 0;
+        }
+
+        $query = [
+            'size' => 0,
+            'query' => [
+                'bool' => [
+                    'filter' => [
+                        ['exists' => ['field' => $field]],
+                    ],
+                    'should' => $should,
+                    'minimum_should_match' => 1,
+                ],
+            ],
+        ];
+
+        $response = $this->request('POST', '/' . $this->indexName() . '/_search', $query, false);
+        return isset($response['hits']['total']['value']) ? (int)$response['hits']['total']['value'] : 0;
+    }
+
     public function ensureIndex(bool $forceRecreate = false): void
     {
         $this->ensurePipeline();
@@ -677,6 +759,7 @@ class Client
                     }
 
                     $relevantIds = [];
+                    $softAttributeMismatchedIds = [];
                     $poorIds = [];
                     $attributeMismatchedPoorIds = [];
                     $rerankedDiagnostics = [];
@@ -687,16 +770,34 @@ class Client
                             $sourceById[$id] ?? ['embedding_text' => $documentTextsById[$id] ?? ''],
                             $productIntentTerms
                         );
-                        $matchesAttributeIntents = $this->attributeIntentResolver()->matchesSource(
+                        $attributeMatchDetails = $this->attributeIntentResolver()->matchDetails(
                             $sourceById[$id] ?? [],
                             $attributeIntents
                         );
+                        $matchesStrictAttributeIntents = true;
+                        $hasSoftAttributeMismatch = false;
+                        foreach ($attributeMatchDetails as $attributeMatchDetail) {
+                            if (!empty($attributeMatchDetail['matched'])) {
+                                continue;
+                            }
+
+                            if (($attributeMatchDetail['mode'] ?? 'strict') === 'soft') {
+                                $hasSoftAttributeMismatch = true;
+                            } else {
+                                $matchesStrictAttributeIntents = false;
+                            }
+                        }
                         // Apply the product intent guard, the gap-cut and the absolute config floor.
-                        if ($matchesProductIntent && $matchesAttributeIntents && $i <= $cutAfter && $score >= $configMinScore) {
-                            $relevantIds[] = $id;
-                            $decision = 'relevant';
+                        if ($matchesProductIntent && $matchesStrictAttributeIntents && $i <= $cutAfter && $score >= $configMinScore) {
+                            if ($hasSoftAttributeMismatch) {
+                                $softAttributeMismatchedIds[] = $id;
+                                $decision = 'soft_attribute_demoted';
+                            } else {
+                                $relevantIds[] = $id;
+                                $decision = 'relevant';
+                            }
                         } else {
-                            if (!$matchesAttributeIntents && !empty($attributeIntents)) {
+                            if (!$matchesStrictAttributeIntents && !empty($attributeIntents)) {
                                 $attributeMismatchedPoorIds[] = $id;
                             } else {
                                 $poorIds[] = $id;
@@ -709,7 +810,10 @@ class Client
                                 'id' => $id,
                                 'score' => $score,
                                 'matches_intent' => $matchesProductIntent,
-                                'matches_attributes' => $matchesAttributeIntents,
+                                'matches_attributes' => $matchesStrictAttributeIntents && !$hasSoftAttributeMismatch,
+                                'matches_strict_attributes' => $matchesStrictAttributeIntents,
+                                'has_soft_attribute_mismatch' => $hasSoftAttributeMismatch,
+                                'attribute_details' => $attributeMatchDetails,
                                 'decision' => $decision,
                             ];
                         }
@@ -732,6 +836,7 @@ class Client
 
                     $finalIds = array_values(array_unique(array_merge(
                         $relevantIds,
+                        $softAttributeMismatchedIds,
                         $remainingRelevantIds,
                         $poorIds,
                         $attributeMismatchedPoorIds,
@@ -743,6 +848,7 @@ class Client
                         'config_min_score' => $configMinScore,
                         'reranked' => $rerankedDiagnostics,
                         'relevant_count' => count($relevantIds),
+                        'soft_attribute_demoted_count' => count($softAttributeMismatchedIds),
                         'demoted_count' => count($poorIds),
                         'attribute_mismatched_demoted_count' => count($attributeMismatchedPoorIds),
                         'remaining_relevant_count' => count($remainingRelevantIds),
@@ -943,6 +1049,18 @@ class Client
     private function rawPost(string $path, string $body, string $contentType): array
     {
         return $this->rawRequest('POST', $this->baseUrl() . $path, $body, $contentType);
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function sampleValueToText($value): string
+    {
+        if (is_array($value)) {
+            return trim(implode(' ', array_map(fn($item): string => $this->sampleValueToText($item), $value)));
+        }
+
+        return trim((string)$value);
     }
 
     private function rawRequest(

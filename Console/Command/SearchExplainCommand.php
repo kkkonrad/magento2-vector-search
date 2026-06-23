@@ -117,21 +117,45 @@ class SearchExplainCommand extends Command
                         $item['name'] ?? ''
                     ));
                 }
+            } elseif ($name === 'attribute_intents_detected') {
+                $intents = $eventData['intents'] ?? [];
+                if (empty($intents)) {
+                    $output->writeln('<info>Attributes:</info> none');
+                    continue;
+                }
+
+                $parts = [];
+                foreach ($intents as $intent) {
+                    $fields = array_map(
+                        static fn(string $field): string => 'attr_' . $field,
+                        $intent['fields'] ?? []
+                    );
+                    $parts[] = sprintf(
+                        '%s:%s fields=%s',
+                        $intent['attribute'] ?? '',
+                        $intent['group'] ?? '',
+                        implode('|', $fields)
+                    );
+                }
+                $output->writeln('<info>Attributes:</info> ' . implode('; ', $parts));
             } elseif ($name === 'reranking_result') {
                 $output->writeln(sprintf(
-                    '<comment>Reranking:</comment> relevant=%d demoted=%d remaining_relevant=%d remaining_demoted=%d cut_after=%s',
+                    '<comment>Reranking:</comment> relevant=%d soft_attr=%d demoted=%d attr_demoted=%d remaining_relevant=%d remaining_demoted=%d cut_after=%s',
                     $eventData['relevant_count'] ?? 0,
+                    $eventData['soft_attribute_demoted_count'] ?? 0,
                     $eventData['demoted_count'] ?? 0,
+                    $eventData['attribute_mismatched_demoted_count'] ?? 0,
                     $eventData['remaining_relevant_count'] ?? 0,
                     $eventData['remaining_demoted_count'] ?? 0,
                     $eventData['cut_after'] ?? ''
                 ));
                 foreach (array_slice($eventData['reranked'] ?? [], 0, 10) as $item) {
                     $output->writeln(sprintf(
-                        '  %d | score=%s | intent=%s | %s',
+                        '  %d | score=%s | product=%s | attr=%s | %s',
                         $item['id'] ?? 0,
                         $item['score'] ?? '',
-                        (!empty($item['matches_intent']) && ($item['matches_attributes'] ?? true)) ? 'yes' : 'no',
+                        !empty($item['matches_intent']) ? 'yes' : 'no',
+                        $this->formatAttributeDetails($item['attribute_details'] ?? []),
                         $item['decision'] ?? ''
                     ));
                 }
@@ -139,6 +163,31 @@ class SearchExplainCommand extends Command
                 $output->writeln('<error>' . $name . '</error> ' . json_encode($eventData, JSON_UNESCAPED_UNICODE));
             }
         }
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $details
+     */
+    private function formatAttributeDetails(array $details): string
+    {
+        if (empty($details)) {
+            return 'n/a';
+        }
+
+        $parts = [];
+        foreach ($details as $detail) {
+            $matchedFields = $detail['matched_fields'] ?? [];
+            $parts[] = sprintf(
+                '%s:%s[%s]=%s%s',
+                $detail['attribute'] ?? '',
+                $detail['group'] ?? '',
+                $detail['mode'] ?? 'strict',
+                !empty($detail['matched']) ? 'yes' : 'no',
+                !empty($matchedFields) ? '(' . implode('|', $matchedFields) . ')' : ''
+            );
+        }
+
+        return implode(',', $parts);
     }
 
     /**

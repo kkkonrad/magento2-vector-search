@@ -6,6 +6,7 @@ namespace Kkkonrad\VectorSearch\Plugin;
 use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\Search\RequestSearchResultStorage;
 use Kkkonrad\VectorSearch\Model\Search\SearchDiagnostics;
+use Kkkonrad\VectorSearch\Model\Search\SearchMetricsLogger;
 use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\Framework\Api\Search\DocumentFactory;
 use Magento\Framework\Api\Search\SearchCriteriaInterface;
@@ -23,6 +24,8 @@ use Psr\Log\LoggerInterface;
  */
 class SearchResultPlugin
 {
+    private bool $shouldFlushDiagnostics = false;
+
     public function __construct(
         private readonly RequestInterface $request,
         private readonly StoreManagerInterface $storeManager,
@@ -32,6 +35,7 @@ class SearchResultPlugin
         private readonly ?RequestSearchResultStorage $requestSearchResultStorage = null,
         private readonly ?Config $config = null,
         private readonly ?SearchDiagnostics $searchDiagnostics = null,
+        private readonly ?SearchMetricsLogger $searchMetricsLogger = null,
         private readonly ?ResponseInterface $response = null
     ) {}
 
@@ -128,20 +132,19 @@ class SearchResultPlugin
         int $currentPage
     ): void {
         $config = $this->getConfig();
-        if (!$config->isDiagnosticsEnabled()) {
-            return;
-        }
-
+        $this->shouldFlushDiagnostics = false;
         $configuredToken = $config->getDiagnosticsToken();
         $requestToken = (string)$this->request->getParam('vector_debug_token', '');
-        if ($configuredToken === '' || !hash_equals($configuredToken, $requestToken)) {
+        $debugRequested = $config->isDiagnosticsEnabled()
+            && $configuredToken !== ''
+            && hash_equals($configuredToken, $requestToken)
+            && (string)$this->request->getParam('vector_debug', '') === '1';
+        $metricsEnabled = $config->isMetricsEnabled();
+        if (!$debugRequested && !$metricsEnabled) {
             return;
         }
 
-        if ((string)$this->request->getParam('vector_debug', '') !== '1') {
-            return;
-        }
-
+        $this->shouldFlushDiagnostics = $debugRequested;
         $this->getSearchDiagnostics()->start(
             $queryText,
             $storeId,
@@ -167,7 +170,12 @@ class SearchResultPlugin
         $diagnostics->set('total_count', count($entityIds));
         $diagnostics->set('top_ids', array_slice($entityIds, 0, 25));
         $diagnostics->set('page_ids', $pageIds);
-        $diagnostics->flush($this->logger, $this->getResponse());
+        if ($this->getConfig()->isMetricsEnabled()) {
+            $this->getSearchMetricsLogger()->record($diagnostics->getData());
+        }
+        if ($this->shouldFlushDiagnostics) {
+            $diagnostics->flush($this->logger, $this->getResponse());
+        }
     }
 
 
@@ -182,6 +190,13 @@ class SearchResultPlugin
     {
         return $this->searchDiagnostics
             ?? ObjectManager::getInstance()->get(SearchDiagnostics::class);
+    }
+
+
+    private function getSearchMetricsLogger(): SearchMetricsLogger
+    {
+        return $this->searchMetricsLogger
+            ?? ObjectManager::getInstance()->get(SearchMetricsLogger::class);
     }
 
 

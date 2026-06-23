@@ -52,6 +52,8 @@ klocek,blok]]></synonym_rules>
                 <stop_words>dla,do,z,ze,i,w,we,na,o,od,po,pod,nad,oraz</stop_words>
             </query_normalization>
             <attribute_intent>
+                <aliases><![CDATA[color=color]]></aliases>
+                <modes><![CDATA[color=strict]]></modes>
                 <rules><![CDATA[color:blue=niebiesk,niebieski,niebieskie,blue
 color:black=czarn,czarne,czarny,black
 color:red=czerwon,czerwone,czerwony,red
@@ -66,6 +68,9 @@ color:white=biał,bial,biały,bialy,white]]></rules>
                 <enabled>0</enabled>
                 <token></token>
             </diagnostics>
+            <metrics>
+                <enabled>0</enabled>
+            </metrics>
             <regression>
                 <rules><![CDATA[spodenki dla kobiet | store=1 | limit=72 | min_results=12 | must_top=2040:3,1951:5 | must_not_top=21:10,22:10,45:10
 niebieskie spodnie dla kobiet | store=1 | limit=72 | min_results=12 | must_not_top=41:10

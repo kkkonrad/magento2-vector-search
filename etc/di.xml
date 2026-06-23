@@ -29,6 +29,10 @@
                       xsi:type="object">Kkkonrad\VectorSearch\Console\Command\SearchRegressionCommand</item>
                 <item name="kkkonrad_vectorsearch_explain"
                       xsi:type="object">Kkkonrad\VectorSearch\Console\Command\SearchExplainCommand</item>
+                <item name="kkkonrad_vectorsearch_config_validate"
+                      xsi:type="object">Kkkonrad\VectorSearch\Console\Command\SearchConfigValidateCommand</item>
+                <item name="kkkonrad_vectorsearch_config_suggest"
+                      xsi:type="object">Kkkonrad\VectorSearch\Console\Command\SearchConfigSuggestCommand</item>
             </argument>
         </arguments>
     </type>

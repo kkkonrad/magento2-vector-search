@@ -118,6 +118,14 @@
                     <label>Reguły intencji atrybutów</label>
                     <comment><![CDATA[Jedna reguła na linię w formacie <code>attribute:group=term1,term2</code>, np. <code>color:blue=niebiesk,blue</code> lub <code>material:cotton=bawełn,cotton</code>. Jeśli query zawiera termin, produkty bez dopasowania w <code>attr_attribute</code> są demotowane po rerankingu.]]></comment>
                 </field>
+                <field id="aliases" translate="label comment" type="textarea" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Aliasy pól atrybutów</label>
+                    <comment><![CDATA[Jedna grupa na linię w formacie <code>attribute=field1,field2</code>, np. <code>material=material,fabric,composition</code>. Reguła <code>material:cotton</code> sprawdzi wtedy pola indeksu <code>attr_material</code>, <code>attr_fabric</code> i <code>attr_composition</code>.]]></comment>
+                </field>
+                <field id="modes" translate="label comment" type="textarea" sortOrder="30" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Tryby atrybutów</label>
+                    <comment><![CDATA[Jedna grupa na linię w formacie <code>attribute=strict|soft|off</code>. <code>strict</code> mocno demotuje brak dopasowania, <code>soft</code> daje lekką karę w rerankingu, a <code>off</code> wyłącza reguły tego atrybutu.]]></comment>
+                </field>
             </group>
             <group id="diagnostics" translate="label" sortOrder="70" showInDefault="1" showInWebsite="0" showInStore="0">
                 <label>Diagnostyka</label>
@@ -131,7 +139,15 @@
                     <comment>Wymagany token dla publicznego parametru vector_debug_token. Zostawienie pustego tokenu blokuje diagnostykę z frontendu.</comment>
                 </field>
             </group>
-            <group id="regression" translate="label" sortOrder="80" showInDefault="1" showInWebsite="0" showInStore="0">
+            <group id="metrics" translate="label" sortOrder="80" showInDefault="1" showInWebsite="0" showInStore="0">
+                <label>Metryki Skuteczności</label>
+                <field id="enabled" translate="label comment" type="select" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Włącz metryki wyszukiwania</label>
+                    <comment>Zapisuje krótki log JSON [VectorSearch][metrics] dla każdego obsłużonego searcha: czasy, cache, intencje, democje i top wyniki. Nie wymaga tokenu diagnostycznego.</comment>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                </field>
+            </group>
+            <group id="regression" translate="label" sortOrder="90" showInDefault="1" showInWebsite="0" showInStore="0">
                 <label>Regression Suite</label>
                 <field id="rules" translate="label comment" type="textarea" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Reguły regresji wyników</label>

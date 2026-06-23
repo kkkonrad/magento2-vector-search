@@ -27,11 +27,14 @@ class Config
     private const XML_RERANKING_CIRCUIT_COOLDOWN_SECONDS = 'vectorsearch/reranking/circuit_cooldown_seconds';
     private const XML_DIAGNOSTICS_ENABLED = 'vectorsearch/diagnostics/enabled';
     private const XML_DIAGNOSTICS_TOKEN = 'vectorsearch/diagnostics/token';
+    private const XML_METRICS_ENABLED = 'vectorsearch/metrics/enabled';
     private const XML_PRODUCT_INTENT_RULES = 'vectorsearch/product_intent/rules';
     private const XML_REGRESSION_RULES = 'vectorsearch/regression/rules';
     private const XML_QUERY_SYNONYM_RULES = 'vectorsearch/query_normalization/synonym_rules';
     private const XML_QUERY_STOP_WORDS = 'vectorsearch/query_normalization/stop_words';
     private const XML_ATTRIBUTE_INTENT_RULES = 'vectorsearch/attribute_intent/rules';
+    private const XML_ATTRIBUTE_INTENT_ALIASES = 'vectorsearch/attribute_intent/aliases';
+    private const XML_ATTRIBUTE_INTENT_MODES = 'vectorsearch/attribute_intent/modes';
 
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig
@@ -209,6 +212,11 @@ class Config
         return trim((string)$this->scopeConfig->getValue(self::XML_DIAGNOSTICS_TOKEN));
     }
 
+    public function isMetricsEnabled(): bool
+    {
+        return $this->scopeConfig->isSetFlag(self::XML_METRICS_ENABLED);
+    }
+
     public function getProductIntentRules(): string
     {
         return trim((string)$this->scopeConfig->getValue(self::XML_PRODUCT_INTENT_RULES));
@@ -232,5 +240,15 @@ class Config
     public function getAttributeIntentRules(): string
     {
         return trim((string)$this->scopeConfig->getValue(self::XML_ATTRIBUTE_INTENT_RULES));
+    }
+
+    public function getAttributeIntentAliases(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_ATTRIBUTE_INTENT_ALIASES));
+    }
+
+    public function getAttributeIntentModes(): string
+    {
+        return trim((string)$this->scopeConfig->getValue(self::XML_ATTRIBUTE_INTENT_MODES));
     }
 }
