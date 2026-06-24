@@ -31,6 +31,29 @@ define([
         return $('<div/>').text(value || '').html();
     }
 
+    function highlightText(text, query) {
+        if (!query) {
+            return escapeHtml(text);
+        }
+        var escapedText = escapeHtml(text);
+        var terms = query.split(/[^a-zA-Z0-9\u00a0-\u00ff\u0100-\u017f-]+/).filter(Boolean);
+        if (!terms.length) {
+            return escapedText;
+        }
+        terms.sort(function (a, b) {
+            return b.length - a.length;
+        });
+        var regexString = '(' + terms.map(function (term) {
+            return escapeHtml(term).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        }).join('|') + ')';
+        try {
+            var regex = new RegExp(regexString, 'gi');
+            return escapedText.replace(regex, '<strong class="vrs-highlight">$1</strong>');
+        } catch (e) {
+            return escapedText;
+        }
+    }
+
     return function (config) {
         var input = $(config.searchInput || '#search'),
             form = $(config.form || '#search_mini_form'),
@@ -44,6 +67,7 @@ define([
             responseCache = {},
             responseCacheLifetime = parseInt(config.cacheLifetime || 300000, 10),
             debouncedFetchSuggestions,
+            currentQuery = '',
             panel;
 
         if (!input.length || input.data('vectorsearch-rich-suggest')) {
@@ -160,7 +184,7 @@ define([
         function renderPhrase(item) {
             return '<a class="vrs-item vrs-phrase" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 renderIcon('phrase') +
-                '<span class="vrs-copy"><strong>' + escapeHtml(item.title) + '</strong></span>' +
+                '<span class="vrs-copy"><span>' + highlightText(item.title, currentQuery) + '</span></span>' +
                 '</a>';
         }
 
@@ -169,14 +193,14 @@ define([
 
             return '<a class="vrs-item vrs-category" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 renderIcon('category') +
-                '<span class="vrs-copy"><strong>' + escapeHtml(item.title) + '</strong><small>' + escapeHtml(path) + '</small></span>' +
+                '<span class="vrs-copy"><span>' + highlightText(item.title, currentQuery) + '</span><small>' + escapeHtml(path) + '</small></span>' +
                 '</a>';
         }
 
         function renderProduct(item) {
             return '<a class="vrs-item vrs-product" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 '<span class="vrs-product-image"><img src="' + escapeHtml(item.image) + '" alt="" loading="lazy"/></span>' +
-                '<span class="vrs-copy"><strong>' + escapeHtml(item.title) + '</strong><small>' + escapeHtml(item.sku) + '</small>' +
+                '<span class="vrs-copy"><span class="vrs-product-name">' + highlightText(item.title, currentQuery) + '</span><small>' + escapeHtml(item.sku) + '</small>' +
                 '<span class="vrs-price">' + escapeHtml(item.price) + '</span></span>' +
                 '</a>';
         }
@@ -184,6 +208,8 @@ define([
         function show(data) {
             var html,
                 topGrid;
+
+            currentQuery = data.query || input.val() || '';
 
             if (!isInputVisible() || !hasResults(data)) {
                 hide();

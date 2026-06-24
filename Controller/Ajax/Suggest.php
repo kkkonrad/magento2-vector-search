@@ -171,7 +171,7 @@ class Suggest implements HttpGetActionInterface
                 'title' => $name,
                 'sku' => (string)$product->getSku(),
                 'url' => $product->getProductUrl(),
-                'image' => $this->imageHelper->init($product, 'product_thumbnail_image')->getUrl(),
+                'image' => $this->imageHelper->init($product, 'product_small_image')->getUrl(),
                 'price' => $this->priceHelper->currency((float)$product->getFinalPrice(), true, false),
             ];
 
