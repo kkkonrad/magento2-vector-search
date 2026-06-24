@@ -66,12 +66,19 @@ define([
             activeIndex = -1,
             responseCache = {},
             responseCacheLifetime = parseInt(config.cacheLifetime || 300000, 10),
+            mobilePanelTopOffset = config.mobilePanelTopOffset !== undefined ?
+                parseInt(config.mobilePanelTopOffset, 10) :
+                -5,
             debouncedFetchSuggestions,
             currentQuery = '',
             panel;
 
         if (!input.length || input.data('vectorsearch-rich-suggest')) {
             return;
+        }
+
+        if (isNaN(mobilePanelTopOffset)) {
+            mobilePanelTopOffset = -5;
         }
 
         function label(key, fallback) {
@@ -110,7 +117,7 @@ define([
                     panel.css({
                         left: inputOffset.left - controlOffset.left,
                         right: 'auto',
-                        top: inputOffset.top - controlOffset.top + inputHeight - 5,
+                        top: inputOffset.top - controlOffset.top + inputHeight + mobilePanelTopOffset,
                         width: input.outerWidth()
                     });
                 }
@@ -182,7 +189,7 @@ define([
         }
 
         function renderPhrase(item) {
-            return '<a class="vrs-item vrs-phrase" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
+            return '<a class="vrs-item vrs-phrase" role="option" aria-selected="false" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 renderIcon('phrase') +
                 '<span class="vrs-copy"><span>' + highlightText(item.title, currentQuery) + '</span></span>' +
                 '</a>';
@@ -191,14 +198,14 @@ define([
         function renderCategory(item) {
             var path = item.path || label('category', 'Category');
 
-            return '<a class="vrs-item vrs-category" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
+            return '<a class="vrs-item vrs-category" role="option" aria-selected="false" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 renderIcon('category') +
                 '<span class="vrs-copy"><span>' + highlightText(item.title, currentQuery) + '</span><small>' + escapeHtml(path) + '</small></span>' +
                 '</a>';
         }
 
         function renderProduct(item) {
-            return '<a class="vrs-item vrs-product" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
+            return '<a class="vrs-item vrs-product" role="option" aria-selected="false" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 '<span class="vrs-product-image"><img src="' + escapeHtml(item.image) + '" alt="" loading="lazy"/></span>' +
                 '<span class="vrs-copy"><span class="vrs-product-name">' + highlightText(item.title, currentQuery) + '</span><small>' + escapeHtml(item.sku) + '</small>' +
                 '<span class="vrs-price">' + escapeHtml(item.price) + '</span></span>' +
@@ -259,8 +266,13 @@ define([
                 index = 0;
             }
 
-            list.removeClass('is-active').removeAttr('id');
-            item = list.eq(index).addClass('is-active').attr('id', 'vectorsearch-rich-option-' + index);
+            list.removeClass('is-active').removeAttr('id').attr('aria-selected', 'false');
+            item = list.eq(index)
+                .addClass('is-active')
+                .attr({
+                    id: 'vectorsearch-rich-option-' + index,
+                    'aria-selected': 'true'
+                });
             activeIndex = index;
             input.attr('aria-activedescendant', item.attr('id'));
         }
@@ -269,7 +281,8 @@ define([
             var query = $.trim(input.val()),
                 cacheKey = query.toLowerCase(),
                 cached = responseCache[cacheKey],
-                now = Date.now();
+                now = Date.now(),
+                activeRequest;
 
             if (!isInputVisible() || query.length < minLength) {
                 if (request) {
@@ -298,8 +311,10 @@ define([
             positionPanel();
             disableNativeAutocomplete();
 
-            request = $.getJSON(endpoint, {q: query})
-                .done(function (data) {
+            activeRequest = $.getJSON(endpoint, {q: query});
+            request = activeRequest;
+
+            activeRequest.done(function (data) {
                     if ($.trim(input.val()) !== query) {
                         return;
                     }
@@ -309,10 +324,13 @@ define([
                         expires: Date.now() + responseCacheLifetime
                     };
                     show(data);
-                })
-                .fail(function (xhr) {
+                }).fail(function (xhr) {
                     if (xhr.statusText !== 'abort') {
                         hide();
+                    }
+                }).always(function () {
+                    if (request === activeRequest) {
+                        request = null;
                     }
                 });
         }
