@@ -64,6 +64,42 @@ define([
             }
         }
 
+        function isInputVisible() {
+            return input.is(':visible') && input.outerWidth() > 20;
+        }
+
+        function positionPanel() {
+            var controlOffset,
+                inputOffset,
+                inputHeight;
+
+            if (!isInputVisible()) {
+                return;
+            }
+
+            if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+                controlOffset = input.closest('.control').offset();
+                inputOffset = input.offset();
+                inputHeight = input.outerHeight();
+
+                if (controlOffset && inputOffset && inputHeight) {
+                    panel.css({
+                        left: inputOffset.left - controlOffset.left,
+                        right: 'auto',
+                        top: inputOffset.top - controlOffset.top + inputHeight - 5,
+                        width: input.outerWidth()
+                    });
+                }
+            } else {
+                panel.css({
+                    left: '',
+                    right: '',
+                    top: '',
+                    width: ''
+                });
+            }
+        }
+
         input.data('vectorsearch-rich-suggest', true);
         form.addClass('vectorsearch-rich-form');
         form.closest('.block-search').addClass('vectorsearch-rich-block');
@@ -140,8 +176,8 @@ define([
         function renderProduct(item) {
             return '<a class="vrs-item vrs-product" role="option" href="' + escapeHtml(item.url) + '" data-vrs-item>' +
                 '<span class="vrs-product-image"><img src="' + escapeHtml(item.image) + '" alt="" loading="lazy"/></span>' +
-                '<span class="vrs-copy"><strong>' + escapeHtml(item.title) + '</strong><small>' + escapeHtml(item.sku) + '</small></span>' +
-                '<span class="vrs-price">' + escapeHtml(item.price) + '</span>' +
+                '<span class="vrs-copy"><strong>' + escapeHtml(item.title) + '</strong><small>' + escapeHtml(item.sku) + '</small>' +
+                '<span class="vrs-price">' + escapeHtml(item.price) + '</span></span>' +
                 '</a>';
         }
 
@@ -149,7 +185,7 @@ define([
             var html,
                 topGrid;
 
-            if (!hasResults(data)) {
+            if (!isInputVisible() || !hasResults(data)) {
                 hide();
                 return;
             }
@@ -166,6 +202,7 @@ define([
 
             activeIndex = -1;
             panel.html(html).show();
+            positionPanel();
             disableNativeAutocomplete();
             input.attr('aria-expanded', 'true').removeAttr('aria-activedescendant');
         }
@@ -208,7 +245,7 @@ define([
                 cached = responseCache[cacheKey],
                 now = Date.now();
 
-            if (query.length < minLength) {
+            if (!isInputVisible() || query.length < minLength) {
                 if (request) {
                     request.abort();
                 }
@@ -232,6 +269,7 @@ define([
                 '<span>' + escapeHtml(label('searching', 'Searching...')) + '</span>' +
                 '</div>'
             ).show();
+            positionPanel();
             disableNativeAutocomplete();
 
             request = $.getJSON(endpoint, {q: query})
@@ -260,8 +298,9 @@ define([
         });
         input.on('input propertychange', debouncedFetchSuggestions);
         input.on('focus', function () {
-            if ($.trim(input.val()).length >= minLength && panel.children().length) {
+            if (isInputVisible() && $.trim(input.val()).length >= minLength && panel.children().length) {
                 panel.show();
+                positionPanel();
                 disableNativeAutocomplete();
             }
         });
@@ -307,6 +346,18 @@ define([
         $(document).on('mousedown.vectorsearchRichSuggest', function (event) {
             if (!$(event.target).closest(panel).length && event.target !== input.get(0)) {
                 hide();
+            }
+        });
+
+        $(window).on('resize.vectorsearchRichSuggest orientationchange.vectorsearchRichSuggest', function () {
+            if (!isInputVisible()) {
+                debouncedFetchSuggestions.cancel();
+                if (request) {
+                    request.abort();
+                }
+                hide();
+            } else if (panel.is(':visible')) {
+                positionPanel();
             }
         });
     };
