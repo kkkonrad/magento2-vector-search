@@ -2,6 +2,9 @@
 
 Modul dodaje hybrydowe wyszukiwanie produktow dla Magento 2. OpenSearch laczy wynik leksykalny z wektorowym, a opcjonalny reranker porzadkuje kandydatow przed zwroceniem listy produktow.
 
+Modul jest kompatybilny ze standardowymi motywami Magento opartymi na Luma/Blank oraz z Hyva Themes.
+Integracja automatycznie laduje warstwe frontendowa odpowiednia dla aktywnego motywu.
+
 ## Wymagania
 
 - Magento 2.4 z wlaczonym `Magento_OpenSearch` i dzialajacym indeksem katalogowym.
