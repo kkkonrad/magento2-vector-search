@@ -26,40 +26,42 @@ php bin/magento config:show catalog/search/engine
 
 Wykonaj polecenia z glownego katalogu Magento.
 
-### 1. Pobranie modulu
+### 1. Instalacja modulu przez Composer
 
 ```bash
-mkdir -p app/code/Kkkonrad
-git clone https://github.com/kkkonrad/magento2-vector-search.git app/code/Kkkonrad/VectorSearch
+composer config repositories.kkkonrad-vector-search vcs \
+    https://github.com/kkkonrad/magento2-vector-search.git
+composer require kkkonrad/magento2-vector-search:dev-master
 ```
 
-Jesli kod zostal dostarczony jako archiwum, jego katalogiem docelowym musi byc:
-
-```text
-app/code/Kkkonrad/VectorSearch
-```
+Pierwsze polecenie dodaje repozytorium GitHub jako zrodlo VCS, poniewaz pakiet nie jest jeszcze
+opublikowany w Packagist. Jawne ograniczenie `dev-master` pozwala zainstalowac aktualna galaz bez
+zmiany globalnego `minimum-stability` projektu. Po opublikowaniu stabilnego wydania bedzie mozna
+zastapic je ograniczeniem wersji, np. `^1.0`.
 
 ### 2. Instalacja embedding-service
 
 ```bash
-cd app/code/Kkkonrad/VectorSearch/embedding-service
+cd vendor/kkkonrad/magento2-vector-search/embedding-service
 npm ci --omit=dev
 sudo install -d -o www-data -g www-data models
-cd ../../../../..
+cd ../../../..
 ```
 
-Pierwsze uruchomienie pobiera modele do katalogu `embedding-service/models` i moze potrwac
-kilka minut. Katalog ten nie jest przechowywany w Git.
+Pierwsze uruchomienie pobiera modele do katalogu
+`vendor/kkkonrad/magento2-vector-search/embedding-service/models` i moze potrwac kilka minut.
+Katalog musi byc zapisywalny dla uzytkownika uruchamiajacego embedding-service (`www-data` w
+dolaczonym pliku systemd).
 
 ### 3. Uruchomienie embedding-service przez systemd
 
 Plik unit zaklada, ze Magento znajduje sie w `/var/www/html`, a PHP/serwer WWW dziala jako
 `www-data`. Jesli instalacja uzywa innej sciezki lub uzytkownika, popraw przed instalacja pola
 `User`, `WorkingDirectory` i `ReadWritePaths` w pliku
-`embedding-service/embedding-service.service`.
+`vendor/kkkonrad/magento2-vector-search/embedding-service/embedding-service.service`.
 
 ```bash
-sudo cp app/code/Kkkonrad/VectorSearch/embedding-service/embedding-service.service \
+sudo cp vendor/kkkonrad/magento2-vector-search/embedding-service/embedding-service.service \
     /etc/systemd/system/magento-vector-search.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now magento-vector-search.service
@@ -82,9 +84,9 @@ sudo journalctl -u magento-vector-search.service -f
 Na srodowisku developerskim bez systemd mozna tymczasowo uzyc:
 
 ```bash
-cd app/code/Kkkonrad/VectorSearch/embedding-service
+cd vendor/kkkonrad/magento2-vector-search/embedding-service
 screen -dmS vectorsearch-embedding node server.js
-cd ../../../../..
+cd ../../../..
 ```
 
 `screen` nie jest zalecanym process managerem na produkcji.
@@ -170,14 +172,14 @@ Przed uzyciem na innym katalogu zastap je w `vectorsearch/regression/rules` wlas
 ## Aktualizacja Modulu
 
 ```bash
-git -C app/code/Kkkonrad/VectorSearch pull --ff-only
-cd app/code/Kkkonrad/VectorSearch/embedding-service
+composer update kkkonrad/magento2-vector-search --with-dependencies
+cd vendor/kkkonrad/magento2-vector-search/embedding-service
 npm ci --omit=dev
-cd ../../../../..
+cd ../../../..
 php bin/magento setup:upgrade
 php bin/magento setup:di:compile
 php bin/magento cache:clean config vectorsearch full_page block_html
-sudo cp app/code/Kkkonrad/VectorSearch/embedding-service/embedding-service.service \
+sudo cp vendor/kkkonrad/magento2-vector-search/embedding-service/embedding-service.service \
     /etc/systemd/system/magento-vector-search.service
 sudo systemctl daemon-reload
 sudo systemctl restart magento-vector-search.service
@@ -321,7 +323,7 @@ ktory poprawia czas bez pogorszenia opoznien wyszukiwania.
 ## Minimalny Zestaw Kontrolny
 
 ```bash
-vendor/bin/phpunit app/code/Kkkonrad/VectorSearch/Test/Unit
+vendor/bin/phpunit vendor/kkkonrad/magento2-vector-search/Test/Unit
 php bin/magento vectorsearch:config:validate
 php bin/magento vectorsearch:regression:run
 ```

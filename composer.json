@@ -1,0 +1,28 @@
+{
+    "name": "kkkonrad/magento2-vector-search",
+    "description": "Hybrid lexical and vector product search for Magento 2 with OpenSearch.",
+    "type": "magento2-module",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.1",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "ext-mbstring": "*",
+        "magento/framework": "^103.0",
+        "magento/module-catalog": "^104.0",
+        "magento/module-catalog-search": "^102.0",
+        "magento/module-inventory-sales-api": "^1.2",
+        "magento/module-search": "^101.1"
+    },
+    "suggest": {
+        "hyva-themes/magento2-theme-module": "Enables the included Hyva storefront integration."
+    },
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "Kkkonrad\\VectorSearch\\": ""
+        }
+    }
+}

@@ -1,11 +1,11 @@
 [Unit]
-Description=Magento Vector Search - Embedding Service (multilingual-e5-base)
+Description=Magento Vector Search - Embedding Service (multilingual-e5-small)
 After=network.target
 
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=/var/www/html/app/code/Kkkonrad/VectorSearch/embedding-service
+WorkingDirectory=/var/www/html/vendor/kkkonrad/magento2-vector-search/embedding-service
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/www/html/app/code/Kkkonrad/VectorSearch/embedding-service/models
+ReadWritePaths=/var/www/html/vendor/kkkonrad/magento2-vector-search/embedding-service/models
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=embedding-service

@@ -5,19 +5,19 @@
 Caly zestaw unit testow modulu:
 
 ```bash
-vendor/bin/phpunit app/code/Kkkonrad/VectorSearch/Test/Unit
+vendor/bin/phpunit vendor/kkkonrad/magento2-vector-search/Test/Unit
 ```
 
 Tylko logika search:
 
 ```bash
-vendor/bin/phpunit app/code/Kkkonrad/VectorSearch/Test/Unit/Model/Search
+vendor/bin/phpunit vendor/kkkonrad/magento2-vector-search/Test/Unit/Model/Search
 ```
 
 Tylko komendy CLI:
 
 ```bash
-vendor/bin/phpunit app/code/Kkkonrad/VectorSearch/Test/Unit/Console/Command
+vendor/bin/phpunit vendor/kkkonrad/magento2-vector-search/Test/Unit/Console/Command
 ```
 
 ## Regression Suite
@@ -41,7 +41,7 @@ Ta komenda nie zastępuje regression suite, ale szybko wykrywa bledne reguly, al
 Minimalny zestaw:
 
 ```bash
-vendor/bin/phpunit app/code/Kkkonrad/VectorSearch/Test/Unit
+vendor/bin/phpunit vendor/kkkonrad/magento2-vector-search/Test/Unit
 php bin/magento vectorsearch:config:validate
 php bin/magento vectorsearch:regression:run
 ```

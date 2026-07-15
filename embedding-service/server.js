@@ -6,6 +6,7 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-small';
 const RERANKER_MODEL = process.env.RERANKER_MODEL || 'Xenova/ms-marco-TinyBERT-L-2-v2';
+const MODEL_CACHE_DIR = process.env.MODEL_CACHE_DIR || './models';
 const MAX_BATCH_SIZE = parseInt(process.env.MAX_BATCH_SIZE || '64', 10);
 const ENABLE_RERANKER = process.env.ENABLE_RERANKER !== '0';
 const API_KEY = process.env.EMBEDDING_API_KEY || '';
@@ -89,7 +90,7 @@ async function kick() {
 async function loadModel() {
     console.log(`[embedding-service] Loading model ${MODEL}...`);
     embedder = await pipeline('feature-extraction', MODEL, {
-        cache_dir: './models',
+        cache_dir: MODEL_CACHE_DIR,
         session_options: {
             intraOpNumThreads: INTRA_OP_THREADS,
             interOpNumThreads: INTER_OP_THREADS,
@@ -113,14 +114,14 @@ async function loadReranker() {
 
     console.log(`[embedding-service] Loading reranker model ${RERANKER_MODEL}...`);
     rerankerModel = await AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL, {
-        cache_dir: './models',
+        cache_dir: MODEL_CACHE_DIR,
         session_options: {
             intraOpNumThreads: INTRA_OP_THREADS,
             interOpNumThreads: INTER_OP_THREADS,
         }
     });
     rerankerTokenizer = await AutoTokenizer.from_pretrained(RERANKER_MODEL, {
-        cache_dir: './models',
+        cache_dir: MODEL_CACHE_DIR,
     });
     console.log(`[embedding-service] Reranker model ${RERANKER_MODEL} ready.`);
 }

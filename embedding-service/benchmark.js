@@ -1,5 +1,7 @@
 import { pipeline } from '@xenova/transformers';
 
+const modelCacheDir = process.env.MODEL_CACHE_DIR || './models';
+
 const models = [
     'Xenova/multilingual-e5-small',
     'Xenova/multilingual-e5-base',
@@ -12,7 +14,7 @@ async function run() {
             console.log(`Loading ${model}...`);
             const startLoad = Date.now();
             const embedder = await pipeline('feature-extraction', model, {
-                cache_dir: './models',
+                cache_dir: modelCacheDir,
                 session_options: {
                     intraOpNumThreads: 4,
                     interOpNumThreads: 4,
