@@ -22,6 +22,12 @@
                 sortOrder="10"/>
     </type>
 
+    <type name="Magento\Catalog\Api\CategoryRepositoryInterface">
+        <plugin name="kkkonrad_vector_search_category_repository"
+                type="Kkkonrad\VectorSearch\Plugin\CategoryRepositoryPlugin"
+                sortOrder="100"/>
+    </type>
+
     <type name="Magento\Framework\Console\CommandList">
         <arguments>
             <argument name="commands" xsi:type="array">

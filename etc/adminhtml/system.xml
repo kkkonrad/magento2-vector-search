@@ -13,8 +13,13 @@
                 <label>Embedding Service</label>
                 <field id="service_url" translate="label comment" type="text" sortOrder="10" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Service URL</label>
-                    <comment><![CDATA[Adres serwisu Node.js generującego embeddingi, np. http://localhost:3000. <strong>Uwaga: Zmiana tego ustawienia (np. na serwis z innym modelem) wymaga pełnej reindeksacji wektorów (<code>bin/magento indexer:reindex vectorsearch</code>).</strong>]]></comment>
+                    <comment><![CDATA[Adres serwisu Node.js generującego embeddingi, np. http://localhost:3000. <strong>Uwaga: Zmiana tego ustawienia (np. na serwis z innym modelem) wymaga pełnej reindeksacji wektorów (<code>bin/magento indexer:reindex vector_search_products</code>).</strong>]]></comment>
                     <validate>required-entry</validate>
+                </field>
+                <field id="api_key" translate="label comment" type="obscure" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
+                    <label>Service API key</label>
+                    <comment>Opcjonalny wspólny sekret wysyłany w nagłówku X-Embedding-Api-Key.</comment>
+                    <backend_model>Magento\Config\Model\Config\Backend\Encrypted</backend_model>
                 </field>
             </group>
             <group id="opensearch" translate="label" sortOrder="20" showInDefault="1" showInWebsite="0" showInStore="0">
@@ -22,7 +27,7 @@
 
                 <field id="index_name" translate="label comment" type="text" sortOrder="30" showInDefault="1" showInWebsite="0" showInStore="0">
                     <label>Nazwa indeksu</label>
-                    <comment><![CDATA[Nazwa indeksu kNN w OpenSearch. <strong>Uwaga: Zmiana tego ustawienia wymaga wykonania pełnej reindeksacji wektorów (<code>bin/magento indexer:reindex vectorsearch</code>).</strong>]]></comment>
+                    <comment><![CDATA[Nazwa indeksu kNN w OpenSearch. <strong>Uwaga: Zmiana tego ustawienia wymaga wykonania pełnej reindeksacji wektorów (<code>bin/magento indexer:reindex vector_search_products</code>).</strong>]]></comment>
                     <validate>required-entry</validate>
                 </field>
                 <field id="search_type" translate="label comment" type="select" sortOrder="35" showInDefault="1" showInWebsite="0" showInStore="0">

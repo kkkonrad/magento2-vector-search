@@ -111,6 +111,25 @@ class VectorSearchServiceTest extends TestCase
         self::assertSame([44, 41], $service->getEntityIds('women watch', 1, []));
     }
 
+    public function testEmptyEmbeddingIsAnInfrastructureFailureNotAValidEmptyResult(): void
+    {
+        $embeddingClient = $this->createMock(EmbeddingClient::class);
+        $embeddingClient->method('getModelName')->willReturn('model-empty');
+        $embeddingClient->method('embedOne')->willReturn([]);
+        $openSearchClient = $this->createMock(OpenSearchClient::class);
+        $openSearchClient->expects(self::never())->method('hybridSearch');
+
+        $service = $this->createService(
+            embeddingClient: $embeddingClient,
+            openSearchClient: $openSearchClient,
+            cacheState: new FakeCacheState(false)
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('empty query vector');
+        $service->getEntityIds('unique empty vector query', 1);
+    }
+
     private function createService(
         ?EmbeddingClient $embeddingClient = null,
         ?OpenSearchClient $openSearchClient = null,

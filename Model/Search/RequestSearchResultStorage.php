@@ -16,6 +16,7 @@ class RequestSearchResultStorage
      * @var int[]
      */
     private array $entityIds = [];
+    private bool $failed = false;
 
     /**
      * @param int[] $entityIds
@@ -25,6 +26,20 @@ class RequestSearchResultStorage
         $this->queryText = $queryText;
         $this->storeId = $storeId;
         $this->entityIds = array_values(array_map('intval', $entityIds));
+        $this->failed = false;
+    }
+
+    public function markFailed(string $queryText, int $storeId): void
+    {
+        $this->queryText = $queryText;
+        $this->storeId = $storeId;
+        $this->entityIds = [];
+        $this->failed = true;
+    }
+
+    public function hasFailed(string $queryText, int $storeId): bool
+    {
+        return $this->failed && $this->queryText === $queryText && $this->storeId === $storeId;
     }
 
     /**

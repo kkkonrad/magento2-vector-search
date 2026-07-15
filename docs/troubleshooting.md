@@ -1,5 +1,26 @@
 # Troubleshooting
 
+## Awaria Embedding-Service Lub OpenSearch
+
+Frontend pozostawia wtedy wynik natywnego wyszukiwania Magento. Pelny reindex konczy sie bledem
+przed przelaczeniem aliasu, wiec dotychczasowy indeks pozostaje aktywny.
+
+Sprawdz:
+
+```bash
+curl http://127.0.0.1:3000/health
+php bin/magento indexer:status vector_search_products
+curl http://127.0.0.1:9200/_cat/aliases/*vector*_current?v
+```
+
+Po przywroceniu uslugi uruchom:
+
+```bash
+php bin/magento indexer:reindex vector_search_products
+php bin/magento vectorsearch:config:validate
+php bin/magento vectorsearch:regression:run
+```
+
 ## Produkt Niepasujacy Jest Wysoko
 
 1. Uruchom:

@@ -47,6 +47,15 @@ php bin/magento vectorsearch:explain "niebieskie szorty" --store=1 --limit=72
 - Walidator konfiguracji: `vectorsearch:config:validate`.
 - Sugestie konfiguracji: `vectorsearch:config:suggest`.
 - Metryki search: `[VectorSearch][metrics]`.
+- Atomowy reindex przez wersjonowany indeks i alias `_current`.
+- Automatyczny fallback do natywnego search Magento przy awarii backendu wektorowego.
+- Filtrowanie ceny, website/store i dostępności przed paginacją wyników.
+
+## Bezpieczny Reindex
+
+Pełny reindex najpierw sprawdza embedding-service, buduje osobny indeks, a dopiero po poprawnym
+zapisaniu wszystkich dokumentów atomowo przełącza alias. Nie usuwaj ręcznie indeksów `_v_*` ani
+aliasu `_current`; moduł zachowuje dwie ostatnie wersje do szybkiego rollbacku.
 
 ## Minimalny Zestaw Kontrolny
 

@@ -8,6 +8,7 @@ Podstawowe sciezki:
 
 ```text
 vectorsearch/embedding/service_url
+vectorsearch/embedding/api_key
 vectorsearch/opensearch/index_name
 vectorsearch/opensearch/search_type
 vectorsearch/opensearch/search_limit
@@ -15,6 +16,17 @@ vectorsearch/opensearch/min_similarity
 ```
 
 Typowy tryb pracy to `hybrid`, czyli polaczenie wyszukiwania leksykalnego i wektorowego.
+
+Serwis domyslnie powinien nasluchiwac tylko na `127.0.0.1`. Jesli port jest dostepny poza hostem,
+ustaw ten sam sekret w `vectorsearch/embedding/api_key` oraz `EMBEDDING_API_KEY` uslugi Node.js.
+Plik unit systemd wczytuje zmienne z `/etc/default/magento-vector-search`, np.:
+
+```text
+EMBEDDING_API_KEY=dlugi-losowy-sekret
+MAX_QUEUE_SIZE=256
+MAX_REQUEST_TEXTS=512
+MAX_TEXT_LENGTH=4000
+```
 
 Konfiguracja wag hybrydowych:
 
@@ -177,3 +189,6 @@ vectorsearch/metrics/enabled
 ```
 
 Metryki zapisują krotki log JSON `[VectorSearch][metrics]` dla kazdego obsluzonego searcha. Pelna diagnostyka wymaga parametrow `vector_debug=1` i `vector_debug_token`.
+
+Zmiana ustawien rankingu automatycznie zmienia fingerprint cache; nie trzeba czekac na wygasniecie
+starych wynikow. Zmiana modelu lub pol indeksowanych nadal wymaga pelnego reindexu.

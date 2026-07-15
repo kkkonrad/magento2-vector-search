@@ -42,6 +42,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
      * @var array<int, array{name: string, path: string}>|null
      */
     private ?array $categoryMap = null;
+    private int $indexedDocumentCount = 0;
 
     public function __construct(
         private readonly DataProvider            $dataProvider,
@@ -64,13 +65,24 @@ class ProductVector implements ActionInterface, MviewActionInterface
     public function executeFull(): void
     {
         $this->logger->info('[VectorSearch] Starting full reindex...');
-        // Full rebuild recreates the index so stale legacy document IDs cannot survive migrations.
-        $this->openSearchClient->ensureIndex(true);
+        $this->indexedDocumentCount = 0;
+        try {
+            // Full rebuild writes to a versioned index. The live alias is switched only after success.
+            $this->openSearchClient->ensureIndex(true);
 
-        foreach ($this->storeManager->getStores() as $store) {
-            $storeId = (int)$store->getId();
-            $this->logger->info("[VectorSearch] Indexing store {$storeId}");
-            $this->indexStore($storeId);
+            foreach ($this->storeManager->getStores() as $store) {
+                $storeId = (int)$store->getId();
+                $this->logger->info("[VectorSearch] Indexing store {$storeId}");
+                $this->indexStore($storeId);
+            }
+
+            if ($this->indexedDocumentCount <= 0) {
+                throw new \RuntimeException('Full vector reindex produced no documents; refusing to activate it.');
+            }
+            $this->openSearchClient->activateRebuiltIndex($this->indexedDocumentCount);
+        } catch (\Throwable $exception) {
+            $this->openSearchClient->abortRebuiltIndex();
+            throw $exception;
         }
 
         $this->cleanSearchCache();
@@ -79,6 +91,10 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
     public function executeList(array $ids): void
     {
+        $ids = $this->expandRelatedProductIds($ids);
+        if ($ids === []) {
+            return;
+        }
         // Partial reindex: ensure index exists, but do not drop it if it's already there
         $this->openSearchClient->ensureIndex(false);
 
@@ -97,6 +113,32 @@ class ProductVector implements ActionInterface, MviewActionInterface
     public function executeRow($id): void
     {
         $this->executeList([$id]);
+    }
+
+    /**
+     * Child attribute changes affect the searchable document of their composite parent.
+     *
+     * @param int[] $ids
+     * @return int[]
+     */
+    private function expandRelatedProductIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn(int $id): bool => $id > 0)));
+        if ($ids === []) {
+            return [];
+        }
+
+        try {
+            $connection = $this->resource->getConnection();
+            $select = $connection->select()
+                ->from($connection->getTableName('catalog_product_relation'), ['parent_id'])
+                ->where('child_id IN (?)', $ids);
+            $parentIds = array_map('intval', $connection->fetchCol($select));
+            return array_values(array_unique(array_merge($ids, $parentIds)));
+        } catch (\Throwable $exception) {
+            $this->logger->error('[VectorSearch] Could not resolve composite parents: ' . $exception->getMessage());
+            throw new \RuntimeException('Could not resolve products affected by partial vector reindex.', 0, $exception);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -197,14 +239,6 @@ class ProductVector implements ActionInterface, MviewActionInterface
                 $this->openSearchClient->deleteProduct($deleteId, $storeId);
                 $this->logger->info("[VectorSearch] Deleted product {$deleteId} from index.");
             }
-        } else {
-            // Full reindex: clean up any orphaned documents from the index that are not present in Magento DB
-            try {
-                $this->openSearchClient->deleteOrphanedProducts($storeId, $processedIds);
-                $this->logger->info("[VectorSearch] Cleaned up orphaned products for store {$storeId}.");
-            } catch (\Throwable $e) {
-                $this->logger->error("[VectorSearch] Error cleaning orphaned products: " . $e->getMessage());
-            }
         }
     }
 
@@ -250,7 +284,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
             $categoryNames = $this->getProductCategoryNames($categoryIds);
             $text = $this->buildEmbeddingText($doc, $item['product_data'], $categoryNames);
             $texts[] = $text;
-            $hashes[] = md5($modelName . ':' . $text);
+            $hashes[] = hash('sha256', $modelName . ':' . $text);
         }
 
         // Fetch existing hashes and embeddings from OpenSearch
@@ -366,6 +400,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
         }
 
         $this->openSearchClient->bulk($docs);
+        $this->indexedDocumentCount += count($docs);
         $this->logger->info('[VectorSearch] Indexed ' . count($docs) . " products for store {$storeId}.");
     }
 
@@ -576,17 +611,11 @@ class ProductVector implements ActionInterface, MviewActionInterface
                 )
                 ->where('ccv.attribute_id = ?', $attributeId);
 
-            // Fetch name for the specified storeId
-            $selectWithStore = clone $select;
-            $selectWithStore->where('ccv.store_id = ?', $storeId);
-            $rows = $conn->fetchAll($selectWithStore);
-
-            // Fallback to store 0 if no results found
-            if (empty($rows) && $storeId !== 0) {
-                $selectWithDefault = clone $select;
-                $selectWithDefault->where('ccv.store_id = ?', 0);
-                $rows = $conn->fetchAll($selectWithDefault);
-            }
+            // Load defaults and then store overrides. Partial store translations must not
+            // make categories without an override disappear from the embedding text.
+            $select->where('ccv.store_id IN (?)', array_values(array_unique([0, $storeId])))
+                ->order('ccv.store_id ASC');
+            $rows = $conn->fetchAll($select);
 
             $map = [];
             foreach ($rows as $row) {

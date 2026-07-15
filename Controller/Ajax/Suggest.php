@@ -5,6 +5,7 @@ namespace Kkkonrad\VectorSearch\Controller\Ajax;
 
 use Kkkonrad\VectorSearch\Model\Cache\Type as VectorSearchCacheType;
 use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
+use Kkkonrad\VectorSearch\Model\Search\SearchCandidateFilter;
 use Magento\Catalog\Api\CategoryRepositoryInterface;
 use Magento\Catalog\Helper\Image as ImageHelper;
 use Magento\Catalog\Model\Category;
@@ -43,7 +44,8 @@ class Suggest implements HttpGetActionInterface
         private readonly PriceHelper $priceHelper,
         private readonly SearchHelper $searchHelper,
         private readonly Visibility $visibility,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly SearchCandidateFilter $searchCandidateFilter
     ) {}
 
     public function execute()
@@ -136,6 +138,7 @@ class Suggest implements HttpGetActionInterface
     {
         $storeId = (int)$this->storeManager->getStore()->getId();
         $rankedIds = $this->vectorSearchService->getEntityIds($query, $storeId, [], 8, false);
+        $rankedIds = $this->searchCandidateFilter->filter($rankedIds, $storeId, []);
         if (empty($rankedIds)) {
             return [];
         }
@@ -275,7 +278,7 @@ class Suggest implements HttpGetActionInterface
             mb_strtolower($query),
         ];
 
-        return 'vectorsearch_rich_suggest_' . md5(implode('|', $parts));
+        return 'vectorsearch_rich_suggest_' . hash('sha256', implode('|', $parts));
     }
 
     /**

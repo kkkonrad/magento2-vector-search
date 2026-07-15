@@ -65,6 +65,12 @@ class VectorSearchService
             if ($value === null || $value === '' || $value === []) {
                 continue;
             }
+            if (!preg_match('/^[a-zA-Z0-9_]+$/', (string)$field)) {
+                continue;
+            }
+            if (is_string($value) && str_contains($value, ',')) {
+                $value = array_values(array_filter(array_map('trim', explode(',', $value)), 'strlen'));
+            }
             $filters[] = [
                 'field' => (string)$field,
                 'value' => $value
@@ -102,10 +108,11 @@ class VectorSearchService
         }
 
         $limit = $this->resolveSearchLimit($requestedLimit);
-        $filterHash = md5((string)json_encode($criteriaFilters));
+        $filterHash = hash('sha256', (string)json_encode($criteriaFilters));
         $modelName = $this->embeddingClient->getModelName();
         $indexVersion = $this->getIndexVersion();
-        $cacheKey = implode(':', [$storeId, $queryText, $filterHash, $modelName, $limit, $indexVersion, $allowReranking ? 'rerank' : 'fast']);
+        $configFingerprint = $this->config->getSearchConfigFingerprint();
+        $cacheKey = implode(':', [$storeId, $queryText, $filterHash, $modelName, $limit, $indexVersion, $configFingerprint, $allowReranking ? 'rerank' : 'fast']);
         $this->diagnostics()->set('service', [
             'limit' => $limit,
             'filter_hash' => $filterHash,
@@ -113,6 +120,7 @@ class VectorSearchService
             'index_version' => $indexVersion,
             'cache_enabled' => $this->isCacheEnabled(),
             'allow_reranking' => $allowReranking,
+            'config_fingerprint' => $configFingerprint,
         ]);
 
         if (array_key_exists($cacheKey, self::$idsProcessCache)) {
@@ -124,7 +132,7 @@ class VectorSearchService
         }
 
         $cacheEnabled = $this->isCacheEnabled();
-        $magentoCacheKey = 'vectorsearch_ids_' . md5($cacheKey);
+        $magentoCacheKey = 'vectorsearch_ids_' . hash('sha256', $cacheKey);
         if ($cacheEnabled) {
             $cached = $this->cache->load($magentoCacheKey);
             if ($cached !== false) {
@@ -141,7 +149,7 @@ class VectorSearchService
         $vector = $this->getQueryVector($queryText, $modelName);
         if (empty($vector)) {
             $this->diagnostics()->event('empty_query_vector');
-            return self::$idsProcessCache[$cacheKey] = [];
+            throw new \RuntimeException('Embedding service returned an empty query vector');
         }
 
         $startedAt = microtime(true);
@@ -221,7 +229,7 @@ class VectorSearchService
         }
 
         $cacheEnabled = $this->isCacheEnabled();
-        $magentoCacheKey = 'vectorsearch_vector_' . md5($cacheKey);
+        $magentoCacheKey = 'vectorsearch_vector_' . hash('sha256', $cacheKey);
         if ($cacheEnabled) {
             $cached = $this->cache->load($magentoCacheKey);
             if ($cached !== false) {

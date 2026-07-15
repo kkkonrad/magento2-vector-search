@@ -7,6 +7,7 @@ use Kkkonrad\VectorSearch\Model\Config;
 use Kkkonrad\VectorSearch\Model\Search\RequestSearchResultStorage;
 use Kkkonrad\VectorSearch\Model\Search\SearchDiagnostics;
 use Kkkonrad\VectorSearch\Model\Search\SearchMetricsLogger;
+use Kkkonrad\VectorSearch\Model\Search\SearchCandidateFilter;
 use Kkkonrad\VectorSearch\Model\Search\VectorSearchService;
 use Magento\Framework\Api\Search\DocumentFactory;
 use Magento\Framework\Api\Search\SearchCriteriaInterface;
@@ -36,7 +37,8 @@ class SearchResultPlugin
         private readonly ?Config $config = null,
         private readonly ?SearchDiagnostics $searchDiagnostics = null,
         private readonly ?SearchMetricsLogger $searchMetricsLogger = null,
-        private readonly ?ResponseInterface $response = null
+        private readonly ?ResponseInterface $response = null,
+        private readonly ?SearchCandidateFilter $searchCandidateFilter = null
     ) {}
 
     /**
@@ -65,6 +67,11 @@ class SearchResultPlugin
             $requestedLimit = $this->calculateRequestedLimit($pageSize, $currentPage);
             $this->startDiagnostics($queryText, $storeId, $criteriaFilters, $requestedLimit, $pageSize, $currentPage);
             $entityIds = $service->getEntityIds($queryText, $storeId, $criteriaFilters, $requestedLimit);
+            $entityIds = $this->getSearchCandidateFilter()->filter(
+                $entityIds,
+                $storeId,
+                $this->request->getParams()
+            );
 
             if (empty($entityIds)) {
                 $this->markSearchHandled($queryText, $storeId, []);
@@ -98,6 +105,9 @@ class SearchResultPlugin
                 . ' hybrid search items into SearchResult for: ' . $queryText
             );
         } catch (\Exception $e) {
+            if (isset($queryText, $storeId)) {
+                $this->getRequestSearchResultStorage()->markFailed($queryText, $storeId);
+            }
             $this->logger->error('[VectorSearch] SearchResultPlugin error: ' . $e->getMessage());
         }
 
@@ -223,5 +233,11 @@ class SearchResultPlugin
     {
         return $this->vectorSearchService
             ?? ObjectManager::getInstance()->get(VectorSearchService::class);
+    }
+
+    private function getSearchCandidateFilter(): SearchCandidateFilter
+    {
+        return $this->searchCandidateFilter
+            ?? ObjectManager::getInstance()->get(SearchCandidateFilter::class);
     }
 }

@@ -1,14 +1,30 @@
 import { pipeline, AutoTokenizer, AutoModelForSequenceClassification } from '@xenova/transformers';
 import express from 'express';
+import crypto from 'crypto';
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '127.0.0.1';
 const MODEL = process.env.MODEL || 'Xenova/multilingual-e5-small';
 const RERANKER_MODEL = process.env.RERANKER_MODEL || 'Xenova/ms-marco-TinyBERT-L-2-v2';
 const MAX_BATCH_SIZE = parseInt(process.env.MAX_BATCH_SIZE || '64', 10);
 const ENABLE_RERANKER = process.env.ENABLE_RERANKER !== '0';
+const API_KEY = process.env.EMBEDDING_API_KEY || '';
+const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE || '256', 10);
+const MAX_REQUEST_TEXTS = parseInt(process.env.MAX_REQUEST_TEXTS || '512', 10);
+const MAX_TEXT_LENGTH = parseInt(process.env.MAX_TEXT_LENGTH || '4000', 10);
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+app.use((req, res, next) => {
+    if (!API_KEY) return next();
+    const supplied = String(req.headers['x-embedding-api-key'] || '');
+    const expectedBuffer = Buffer.from(API_KEY);
+    const suppliedBuffer = Buffer.from(supplied);
+    if (expectedBuffer.length !== suppliedBuffer.length || !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)) {
+        return res.status(401).json({ error: 'Unauthorized.' });
+    }
+    return next();
+});
 
 let embedder = null;
 let dimension = 384; // default fallback
@@ -33,9 +49,16 @@ let rerankerTokenizer = null;
 
 const queues = { high: [], normal: [] };
 let running = false;
+let lastWasHigh = false;
 
 function enqueue(fn, priority = 'normal') {
     return new Promise((resolve, reject) => {
+        if (queues.high.length + queues.normal.length >= MAX_QUEUE_SIZE) {
+            const error = new Error('Inference queue is full.');
+            error.statusCode = 429;
+            reject(error);
+            return;
+        }
         queues[priority].push(async () => {
             try { resolve(await fn()); }
             catch (err) { reject(err); }
@@ -46,8 +69,10 @@ function enqueue(fn, priority = 'normal') {
 
 async function kick() {
     if (running) return;
-    const task = queues.high.shift() ?? queues.normal.shift();
+    const useHigh = queues.high.length > 0 && (!lastWasHigh || queues.normal.length === 0);
+    const task = useHigh ? queues.high.shift() : (queues.normal.shift() ?? queues.high.shift());
     if (!task) return;
+    lastWasHigh = useHigh;
     running = true;
     try { await task(); }
     finally { running = false; kick(); }
@@ -130,7 +155,8 @@ app.post('/embed', async (req, res) => {
     }
 
     const { texts, priority: bodyPriority } = req.body;
-    if (!Array.isArray(texts) || texts.length === 0) {
+    if (!Array.isArray(texts) || texts.length === 0 || texts.length > MAX_REQUEST_TEXTS
+        || texts.some(text => typeof text !== 'string' || text.length === 0 || text.length > MAX_TEXT_LENGTH)) {
         return res.status(400).json({ error: 'texts must be a non-empty array of strings.' });
     }
 
@@ -167,7 +193,7 @@ app.post('/embed', async (req, res) => {
         });
     } catch (err) {
         console.error('[embedding-service] Error:', err);
-        return res.status(500).json({ error: err.message });
+        return res.status(err.statusCode || 500).json({ error: err.message });
     }
 });
 
@@ -184,7 +210,8 @@ app.post('/rerank', async (req, res) => {
     if (!query || typeof query !== 'string') {
         return res.status(400).json({ error: 'query must be a non-empty string.' });
     }
-    if (!Array.isArray(documents) || documents.length === 0) {
+    if (!Array.isArray(documents) || documents.length === 0 || documents.length > MAX_REQUEST_TEXTS
+        || documents.some(doc => !doc || typeof doc !== 'object' || String(doc.text || '').length > MAX_TEXT_LENGTH)) {
         return res.status(400).json({ error: 'documents must be a non-empty array of objects.' });
     }
 
@@ -242,9 +269,9 @@ app.get('/health', (_req, res) => {
 
 Promise.all([loadModel(), loadReranker()])
     .then(() => {
-        app.listen(PORT, () => {
+        app.listen(PORT, HOST, () => {
             console.log(
-                `[embedding-service] Listening on http://localhost:${PORT}` +
+                `[embedding-service] Listening on http://${HOST}:${PORT}` +
                 `  model=${MODEL}  reranker=${RERANKER_MODEL}  batchSize=${MAX_BATCH_SIZE}`
             );
         });

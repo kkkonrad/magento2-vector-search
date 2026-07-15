@@ -4,10 +4,12 @@ declare(strict_types=1);
 namespace Kkkonrad\VectorSearch\Model;
 
 use Magento\Framework\App\Config\ScopeConfigInterface;
+use Magento\Framework\Encryption\EncryptorInterface;
 
 class Config
 {
     private const XML_OPENSEARCH_EMBEDDING_SERVICE_URL = 'vectorsearch/embedding/service_url';
+    private const XML_EMBEDDING_SERVICE_API_KEY = 'vectorsearch/embedding/api_key';
     private const XML_OPENSEARCH_INDEX_NAME = 'vectorsearch/opensearch/index_name';
     private const XML_OPENSEARCH_SEARCH_TYPE = 'vectorsearch/opensearch/search_type';
 
@@ -37,7 +39,8 @@ class Config
     private const XML_ATTRIBUTE_INTENT_MODES = 'vectorsearch/attribute_intent/modes';
 
     public function __construct(
-        private readonly ScopeConfigInterface $scopeConfig
+        private readonly ScopeConfigInterface $scopeConfig,
+        private readonly EncryptorInterface $encryptor
     ) {}
 
     public function getEmbeddingServiceUrl(): string
@@ -46,6 +49,12 @@ class Config
             (string)$this->scopeConfig->getValue(self::XML_OPENSEARCH_EMBEDDING_SERVICE_URL),
             '/'
         );
+    }
+
+    public function getEmbeddingServiceApiKey(): string
+    {
+        $value = trim((string)$this->scopeConfig->getValue(self::XML_EMBEDDING_SERVICE_API_KEY));
+        return $value === '' ? '' : $this->encryptor->decrypt($value);
     }
 
     public function getOpenSearchNormalizationTechnique(): string
@@ -250,5 +259,32 @@ class Config
     public function getAttributeIntentModes(): string
     {
         return trim((string)$this->scopeConfig->getValue(self::XML_ATTRIBUTE_INTENT_MODES));
+    }
+
+    /**
+     * Changes to ranking configuration must immediately produce a different result-cache key.
+     */
+    public function getSearchConfigFingerprint(): string
+    {
+        $values = [
+            $this->getOpenSearchSearchType(),
+            $this->getOpenSearchCombinationTechnique(),
+            $this->getOpenSearchNormalizationTechnique(),
+            $this->getOpenSearchLexicalWeight(),
+            $this->getOpenSearchKnnWeight(),
+            $this->getOpenSearchMinSimilarity(),
+            $this->getOpenSearchSearchLimit(),
+            $this->isRerankingEnabled(),
+            $this->getRerankingLimit(),
+            $this->getRerankingMinScore(),
+            $this->getProductIntentRules(),
+            $this->getQuerySynonymRules(),
+            $this->getQueryStopWords(),
+            $this->getAttributeIntentRules(),
+            $this->getAttributeIntentAliases(),
+            $this->getAttributeIntentModes(),
+        ];
+
+        return sha1((string)json_encode($values, JSON_UNESCAPED_UNICODE));
     }
 }

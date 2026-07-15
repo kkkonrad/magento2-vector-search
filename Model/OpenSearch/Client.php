@@ -18,12 +18,12 @@ use Magento\Framework\App\ObjectManager;
  */
 class Client
 {
-    private const PIPELINE_ID = 'kkkonrad-vectorsearch-rrf';
-
     /** Cached OpenSearch version string, e.g. "2.12.0" */
     private ?string $version = null;
 
     private ?\CurlHandle $curlHandle = null;
+    private ?string $resolvedReadIndexName = null;
+    private ?string $rebuildIndexName = null;
     private ?SearchDiagnostics $fallbackDiagnostics = null;
     private ?ProductIntentResolver $fallbackProductIntentResolver = null;
     private ?RerankingCircuitBreaker $fallbackRerankingCircuitBreaker = null;
@@ -65,7 +65,32 @@ class Client
 
     private function indexName(): string
     {
+        if ($this->rebuildIndexName !== null) {
+            return $this->rebuildIndexName;
+        }
+        if ($this->resolvedReadIndexName !== null) {
+            return $this->resolvedReadIndexName;
+        }
+
+        $baseName = $this->baseIndexName();
+        $aliasName = $this->activeAliasName();
+        $response = $this->request('GET', '/_alias/' . rawurlencode($aliasName), [], false);
+        return $this->resolvedReadIndexName = $response !== [] ? $aliasName : $baseName;
+    }
+
+    private function baseIndexName(): string
+    {
         return $this->config->getOpenSearchIndexName();
+    }
+
+    private function activeAliasName(): string
+    {
+        return $this->baseIndexName() . '_current';
+    }
+
+    private function pipelineId(): string
+    {
+        return 'kkkonrad-vectorsearch-' . substr(sha1($this->baseIndexName()), 0, 12);
     }
 
     // -------------------------------------------------------------------------
@@ -140,6 +165,7 @@ class Client
                     "[VectorSearch] OpenSearch {$version}: using {$technique} pipeline with {$norm} normalization and weights "
                     . "[lexical: {$lexicalWeight}, knn: {$knnWeight}]."
                 );
+                $modeDescription = $technique . '+' . $norm;
             } else {
                 // Native RRF
                 $normalizationProcessor = [
@@ -147,6 +173,7 @@ class Client
                     'combination'   => ['technique' => 'rrf'],
                 ];
                 $this->logger->info("[VectorSearch] OpenSearch {$version}: using native RRF pipeline.");
+                $modeDescription = 'RRF';
             }
         } else {
             // Fallback for < 2.16: l2 normalisation + harmonic mean
@@ -159,6 +186,7 @@ class Client
                 "[VectorSearch] OpenSearch {$version} < 2.16: RRF not supported, "
                 . 'using l2+harmonic_mean pipeline.'
             );
+            $modeDescription = 'l2+harmonic_mean';
         }
 
         $pipeline = [
@@ -168,12 +196,12 @@ class Client
             ],
         ];
 
-        $response = $this->request('PUT', '/_search/pipeline/' . self::PIPELINE_ID, $pipeline);
+        $response = $this->request('PUT', '/_search/pipeline/' . $this->pipelineId(), $pipeline);
 
         if (isset($response['acknowledged']) && $response['acknowledged'] === true) {
-            $mode = $useRrf ? 'RRF' : 'l2+harmonic_mean';
             $this->logger->info(
-                '[VectorSearch] Search pipeline "' . self::PIPELINE_ID . '" registered (' . $mode . ').'
+                '[VectorSearch] Search pipeline "' . $this->pipelineId() . '" registered ('
+                . $modeDescription . ').'
             );
         } else {
             $this->logger->error('[VectorSearch] Failed to register pipeline: ' . json_encode($response));
@@ -183,8 +211,8 @@ class Client
 
     public function pipelineExists(): bool
     {
-        $response = $this->request('GET', '/_search/pipeline/' . self::PIPELINE_ID, [], false);
-        return isset($response[self::PIPELINE_ID]);
+        $response = $this->request('GET', '/_search/pipeline/' . $this->pipelineId(), [], false);
+        return isset($response[$this->pipelineId()]);
     }
 
     // -------------------------------------------------------------------------
@@ -194,7 +222,7 @@ class Client
     public function indexExists(): bool
     {
         $response = $this->request('GET', '/' . $this->indexName(), [], false);
-        return isset($response[$this->indexName()]);
+        return $response !== [];
     }
 
     /**
@@ -203,7 +231,8 @@ class Client
     public function getMappingProperties(): array
     {
         $response = $this->request('GET', '/' . $this->indexName() . '/_mapping', [], false);
-        return $response[$this->indexName()]['mappings']['properties'] ?? [];
+        $indexData = reset($response);
+        return is_array($indexData) ? ($indexData['mappings']['properties'] ?? []) : [];
     }
 
     /**
@@ -281,7 +310,15 @@ class Client
 
     public function ensureIndex(bool $forceRecreate = false): void
     {
+        // A strict preflight prevents creating an index with a guessed vector dimension.
+        $this->embeddingClient->getHealth($forceRecreate);
         $this->ensurePipeline();
+
+        if ($forceRecreate) {
+            $this->rebuildIndexName = $this->baseIndexName()
+                . '_v_' . gmdate('YmdHis') . '_' . substr(bin2hex(random_bytes(4)), 0, 8);
+            $this->resolvedReadIndexName = null;
+        }
 
         $exists = $this->indexExists();
         $dimensionMismatch = false;
@@ -289,7 +326,8 @@ class Client
         if ($exists) {
             try {
                 $response = $this->request('GET', '/' . $this->indexName() . '/_mapping', [], false);
-                $props = $response[$this->indexName()]['mappings']['properties'] ?? [];
+                $indexData = reset($response);
+                $props = is_array($indexData) ? ($indexData['mappings']['properties'] ?? []) : [];
                 $existingDim = $props['embedding']['dimension'] ?? null;
                 $activeDim = $this->embeddingClient->getDimension();
                 if ($existingDim !== null && (int)$existingDim !== $activeDim) {
@@ -305,7 +343,16 @@ class Client
         }
 
         if (!$forceRecreate && $exists && !$dimensionMismatch) {
+            $this->request('PUT', '/' . $this->indexName() . '/_settings', [
+                'index' => ['search.default_pipeline' => $this->pipelineId()],
+            ]);
             return;
+        }
+
+        if (!$forceRecreate && $dimensionMismatch) {
+            throw new \RuntimeException(
+                'Vector dimension changed. Run a full vector_search_products reindex to rebuild safely.'
+            );
         }
 
         // Build per-attribute field mappings (attr_color, attr_material, …)
@@ -325,7 +372,7 @@ class Client
                     'knn'                     => true,
                     'number_of_shards'        => 1,
                     'number_of_replicas'      => 0,
-                    'search.default_pipeline' => self::PIPELINE_ID,
+                    'search.default_pipeline' => $this->pipelineId(),
                 ],
                 'analysis' => [
                     'analyzer' => [
@@ -372,7 +419,6 @@ class Client
             ],
         ];
 
-        $this->request('DELETE', '/' . $this->indexName(), [], false);
         $response = $this->request('PUT', '/' . $this->indexName(), $mapping);
 
         if (!isset($response['acknowledged']) || $response['acknowledged'] !== true) {
@@ -384,6 +430,81 @@ class Client
             '[VectorSearch] Index "' . $this->indexName() . '" created with RRF pipeline '
             . "and {$attrCount} attribute field(s)."
         );
+    }
+
+    /**
+     * Atomically publishes the index built by ensureIndex(true).
+     */
+    public function activateRebuiltIndex(?int $expectedDocumentCount = null): void
+    {
+        if ($this->rebuildIndexName === null) {
+            throw new \LogicException('No rebuilt index is waiting for activation.');
+        }
+
+        $this->request('POST', '/' . $this->rebuildIndexName . '/_refresh');
+        $countResponse = $this->request('GET', '/' . $this->rebuildIndexName . '/_count');
+        $actualDocumentCount = isset($countResponse['count']) ? (int)$countResponse['count'] : -1;
+        if ($actualDocumentCount < 0 || ($expectedDocumentCount !== null && $actualDocumentCount !== $expectedDocumentCount)) {
+            throw new \RuntimeException(sprintf(
+                'Rebuilt vector index validation failed: expected %s document(s), OpenSearch reports %d.',
+                $expectedDocumentCount === null ? 'a valid count' : (string)$expectedDocumentCount,
+                $actualDocumentCount
+            ));
+        }
+
+        $aliasName = $this->activeAliasName();
+        $existing = $this->request('GET', '/_alias/' . rawurlencode($aliasName), [], false);
+        $actions = [];
+        foreach (array_keys($existing) as $indexName) {
+            $actions[] = ['remove' => ['index' => $indexName, 'alias' => $aliasName]];
+        }
+        $actions[] = [
+            'add' => [
+                'index' => $this->rebuildIndexName,
+                'alias' => $aliasName,
+                'is_write_index' => true,
+            ],
+        ];
+
+        $response = $this->request('POST', '/_aliases', ['actions' => $actions]);
+        if (($response['acknowledged'] ?? false) !== true) {
+            throw new \RuntimeException('OpenSearch did not acknowledge vector index alias activation.');
+        }
+
+        $activated = $this->rebuildIndexName;
+        $this->rebuildIndexName = null;
+        $this->resolvedReadIndexName = $aliasName;
+        $this->logger->info('[VectorSearch] Activated rebuilt index ' . $activated . ' as ' . $aliasName . '.');
+        $this->cleanupOldRebuildIndices();
+    }
+
+    public function abortRebuiltIndex(): void
+    {
+        if ($this->rebuildIndexName === null) {
+            return;
+        }
+        $failedIndex = $this->rebuildIndexName;
+        $this->rebuildIndexName = null;
+        try {
+            $this->request('DELETE', '/' . rawurlencode($failedIndex), [], false);
+        } catch (\Throwable $exception) {
+            $this->logger->warning('[VectorSearch] Could not remove failed rebuild index: ' . $exception->getMessage());
+        }
+        $this->logger->warning('[VectorSearch] Aborted rebuild; active index was not changed.');
+    }
+
+    private function cleanupOldRebuildIndices(): void
+    {
+        try {
+            $response = $this->request('GET', '/' . $this->baseIndexName() . '_v_*/_alias', [], false);
+            $indices = array_keys($response);
+            rsort($indices, SORT_STRING);
+            foreach (array_slice($indices, 2) as $indexName) {
+                $this->request('DELETE', '/' . rawurlencode($indexName), [], false);
+            }
+        } catch (\Throwable $exception) {
+            $this->logger->warning('[VectorSearch] Old vector index cleanup failed: ' . $exception->getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -404,8 +525,19 @@ class Client
 
         $response = $this->rawPost('/' . $this->indexName() . '/_bulk', $body, 'application/x-ndjson');
 
-        if (isset($response['errors']) && $response['errors'] === true) {
-            $this->logger->error('[VectorSearch] Bulk index errors: ' . json_encode($response['items'] ?? []));
+        if (!array_key_exists('errors', $response)) {
+            throw new \RuntimeException('OpenSearch returned an invalid bulk response.');
+        }
+        if ($response['errors'] === true) {
+            $failedItems = array_values(array_filter(
+                $response['items'] ?? [],
+                static function (array $item): bool {
+                    $operation = reset($item);
+                    return is_array($operation) && (int)($operation['status'] ?? 500) >= 300;
+                }
+            ));
+            $this->logger->error('[VectorSearch] Bulk index errors: ' . json_encode($failedItems));
+            throw new \RuntimeException('OpenSearch bulk indexing failed for ' . count($failedItems) . ' document(s).');
         }
     }
 
@@ -426,16 +558,23 @@ class Client
             ['term'  => ['store_id'   => $storeId]],
             ['terms' => ['visibility' => [3, 4]]],
         ];
+        $filterableAttributes = $this->weightProvider->getWeightedAttributes();
 
         // Apply criteria filters dynamically
         foreach ($criteriaFilters as $filter) {
-            $field = $filter['field'];
+            $field = (string)($filter['field'] ?? '');
             $value = $filter['value'];
+            if (!preg_match('/^[a-zA-Z0-9_]+$/', $field)) {
+                continue;
+            }
             
             if ($field === 'category_ids' || $field === 'category_id' || $field === 'cat') {
                 $valArray = is_array($value) ? $value : [$value];
                 $filters[] = ['terms' => ['category_ids' => array_map('intval', $valArray)]];
             } else {
+                if (!isset($filterableAttributes[$field])) {
+                    continue;
+                }
                 // EAV attributes, mapped to attr_{code}_id
                 $mappedField = 'attr_' . $field . '_id';
                 if (is_array($value)) {
@@ -645,6 +784,7 @@ class Client
                             [
                                 'bool' => [
                                     'should' => $shouldClauses,
+                                    'minimum_should_match' => 1,
                                     'filter' => $filters,
                                 ],
                             ],
@@ -1113,16 +1253,26 @@ class Client
             if ($logErrors) {
                 $this->logger->error('[VectorSearch] OpenSearch curl error: ' . $error);
             }
-            return [];
+            throw new \RuntimeException('OpenSearch unavailable: ' . $error);
         }
 
         $statusCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $response = json_decode((string)$raw, true) ?? [];
+        $response = json_decode((string)$raw, true);
+        if ($raw !== '' && !is_array($response)) {
+            throw new \RuntimeException('OpenSearch returned invalid JSON for ' . $method . ' ' . $url);
+        }
+        $response = $response ?? [];
 
-        if ($logErrors && ($statusCode >= 400 || isset($response['error']))) {
-            $this->logger->error(
-                '[VectorSearch] OpenSearch HTTP ' . $statusCode . ' error for ' . $method . ' ' . $url . ': ' . $raw
-            );
+        if ($statusCode >= 400 || isset($response['error'])) {
+            if ($logErrors) {
+                $this->logger->error(
+                    '[VectorSearch] OpenSearch HTTP ' . $statusCode . ' error for ' . $method . ' ' . $url . ': ' . $raw
+                );
+            }
+            if (!$logErrors && $statusCode === 404) {
+                return [];
+            }
+            throw new \RuntimeException('OpenSearch request failed with HTTP ' . $statusCode);
         }
 
         return $response;

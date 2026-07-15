@@ -45,3 +45,11 @@ vendor/bin/phpunit app/code/Kkkonrad/VectorSearch/Test/Unit
 php bin/magento vectorsearch:config:validate
 php bin/magento vectorsearch:regression:run
 ```
+
+Test odpornosci reindexu:
+
+1. zapisz indeks wskazywany przez alias `*_current`,
+2. zatrzymaj embedding-service,
+3. uruchom `indexer:reindex vector_search_products` i oczekuj bledu,
+4. potwierdz, ze alias nadal wskazuje poprzedni indeks,
+5. przywroc serwis i wykonaj poprawny reindex.

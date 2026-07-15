@@ -2,6 +2,15 @@
 
 Komendy nalezy uruchamiac z katalogu glownego Magento.
 
+## Reindex
+
+```bash
+php bin/magento indexer:reindex vector_search_products
+```
+
+Komenda wykonuje readiness check, buduje wersjonowany indeks i atomowo przelacza alias `_current`.
+Nieudany build nie zmienia aktywnego indeksu.
+
 ## Explain
 
 ```bash

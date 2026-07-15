@@ -51,6 +51,9 @@ class SearchPlugin
 
         try {
             $storeId = (int)$this->storeManager->getStore()->getId();
+            if ($this->getRequestSearchResultStorage()->hasFailed($queryText, $storeId)) {
+                return $result;
+            }
             $entityIds = $this->getMarkedEntityIds($queryText, $storeId);
             if ($entityIds === null) {
                 $service = $this->getVectorSearchService();
