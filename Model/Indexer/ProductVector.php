@@ -29,7 +29,7 @@ use Kkkonrad\VectorSearch\Model\Cache\Type as VectorSearchCacheType;
 class ProductVector implements ActionInterface, MviewActionInterface
 {
     /** Number of products fetched from the DB per SQL batch. */
-    private const BATCH_SIZE = 100;
+    private const BATCH_SIZE = 500;
 
     /**
      * Attribute backend types used to fetch dynamic (EAV) attributes.
@@ -64,6 +64,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
     public function executeFull(): void
     {
+        $startedAt = microtime(true);
         $this->logger->info('[VectorSearch] Starting full reindex...');
         $this->indexedDocumentCount = 0;
         try {
@@ -86,7 +87,14 @@ class ProductVector implements ActionInterface, MviewActionInterface
         }
 
         $this->cleanSearchCache();
-        $this->logger->info('[VectorSearch] Full reindex complete.');
+        $elapsed = microtime(true) - $startedAt;
+        $rate = $elapsed > 0.0 ? $this->indexedDocumentCount / $elapsed : 0.0;
+        $this->logger->info(sprintf(
+            '[VectorSearch] Full reindex complete: %d documents in %.2f s (%.1f docs/s).',
+            $this->indexedDocumentCount,
+            $elapsed,
+            $rate
+        ));
     }
 
     public function executeList(array $ids): void
@@ -147,6 +155,8 @@ class ProductVector implements ActionInterface, MviewActionInterface
 
     private function indexStore(int $storeId, array $productIds = []): void
     {
+        $startedAt = microtime(true);
+        $documentsBefore = $this->indexedDocumentCount;
         $this->loadCategoryMap($storeId);
 
         // Build the list of static (flat-table) attribute codes.
@@ -240,6 +250,14 @@ class ProductVector implements ActionInterface, MviewActionInterface
                 $this->logger->info("[VectorSearch] Deleted product {$deleteId} from index.");
             }
         }
+
+        $documentCount = $this->indexedDocumentCount - $documentsBefore;
+        $this->logger->info(sprintf(
+            '[VectorSearch] Store %d complete: %d documents in %.2f s.',
+            $storeId,
+            $documentCount,
+            microtime(true) - $startedAt
+        ));
     }
 
     // -------------------------------------------------------------------------
@@ -254,6 +272,9 @@ class ProductVector implements ActionInterface, MviewActionInterface
         if (empty($batch)) {
             return;
         }
+
+        $batchStartedAt = microtime(true);
+        $stageStartedAt = $batchStartedAt;
 
         // Bulk load category IDs for all products in this batch from DB
         $productIds = array_column($batch, 'entity_id');
@@ -272,8 +293,10 @@ class ProductVector implements ActionInterface, MviewActionInterface
         } catch (\Throwable $e) {
             $this->logger->error('[VectorSearch] Error loading batch category IDs: ' . $e->getMessage());
         }
+        $categoryMs = (microtime(true) - $stageStartedAt) * 1000;
 
         // Build embedding texts from the mapped ES documents.
+        $stageStartedAt = microtime(true);
         $texts = [];
         $hashes = [];
         $modelName = $this->embeddingClient->getModelName();
@@ -286,8 +309,10 @@ class ProductVector implements ActionInterface, MviewActionInterface
             $texts[] = $text;
             $hashes[] = hash('sha256', $modelName . ':' . $text);
         }
+        $textMs = (microtime(true) - $stageStartedAt) * 1000;
 
         // Fetch existing hashes and embeddings from OpenSearch
+        $stageStartedAt = microtime(true);
         $existingHashes = [];
         $existingEmbeddings = [];
         try {
@@ -304,6 +329,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
         } catch (\Throwable $e) {
             $this->logger->warning('[VectorSearch] Hash check failed, generating all embeddings: ' . $e->getMessage());
         }
+        $hashLookupMs = (microtime(true) - $stageStartedAt) * 1000;
 
         // Check which texts actually need embedding
         $textsToEmbed = [];
@@ -323,6 +349,7 @@ class ProductVector implements ActionInterface, MviewActionInterface
             }
         }
 
+        $stageStartedAt = microtime(true);
         if (!empty($textsToEmbed)) {
             try {
                 $newEmbeddings = $this->embeddingClient->embed($textsToEmbed, 'passage');
@@ -335,11 +362,13 @@ class ProductVector implements ActionInterface, MviewActionInterface
                 throw $e;
             }
         }
+        $embeddingMs = (microtime(true) - $stageStartedAt) * 1000;
 
         if ($skippedCount > 0) {
             $this->logger->info("[VectorSearch] Reused {$skippedCount} existing embeddings from OpenSearch (hash matched).");
         }
 
+        $stageStartedAt = microtime(true);
         $weightedAttrCodes = array_keys($this->weightProvider->getWeightedAttributes());
 
         $docs = [];
@@ -399,9 +428,25 @@ class ProductVector implements ActionInterface, MviewActionInterface
             );
         }
 
+        $documentBuildMs = (microtime(true) - $stageStartedAt) * 1000;
+        $stageStartedAt = microtime(true);
         $this->openSearchClient->bulk($docs);
+        $bulkMs = (microtime(true) - $stageStartedAt) * 1000;
         $this->indexedDocumentCount += count($docs);
-        $this->logger->info('[VectorSearch] Indexed ' . count($docs) . " products for store {$storeId}.");
+        $this->logger->info(sprintf(
+            '[VectorSearch] Indexed %d products for store %d in %.1f ms '
+            . '(categories %.1f, text %.1f, hash lookup %.1f, embedding %.1f, documents %.1f, bulk %.1f; reused %d).',
+            count($docs),
+            $storeId,
+            (microtime(true) - $batchStartedAt) * 1000,
+            $categoryMs,
+            $textMs,
+            $hashLookupMs,
+            $embeddingMs,
+            $documentBuildMs,
+            $bulkMs,
+            $skippedCount
+        ));
     }
 
 

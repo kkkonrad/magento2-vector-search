@@ -68,6 +68,19 @@ class Client
         if ($this->rebuildIndexName !== null) {
             return $this->rebuildIndexName;
         }
+
+        return $this->readIndexName();
+    }
+
+    /**
+     * Resolve the index currently serving searches.
+     *
+     * During a full rebuild indexName() intentionally points at the new staging
+     * index. Reads used to reuse unchanged embeddings must keep targeting the
+     * live alias, otherwise every full rebuild recomputes every vector.
+     */
+    private function readIndexName(): string
+    {
         if ($this->resolvedReadIndexName !== null) {
             return $this->resolvedReadIndexName;
         }
@@ -1138,7 +1151,7 @@ class Client
             ]
         ];
 
-        return $this->request('POST', '/' . $this->indexName() . '/_search', $query, false);
+        return $this->request('POST', '/' . $this->readIndexName() . '/_search', $query, false);
     }
 
     /**
@@ -1181,7 +1194,7 @@ class Client
     // Internal HTTP helpers
     // -------------------------------------------------------------------------
 
-    private function request(string $method, string $path, array $body = [], bool $logErrors = true): array
+    protected function request(string $method, string $path, array $body = [], bool $logErrors = true): array
     {
         $url     = $this->baseUrl() . $path;
         $payload = empty($body) ? '' : json_encode($body, JSON_UNESCAPED_UNICODE);

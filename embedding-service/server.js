@@ -12,6 +12,12 @@ const API_KEY = process.env.EMBEDDING_API_KEY || '';
 const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE || '256', 10);
 const MAX_REQUEST_TEXTS = parseInt(process.env.MAX_REQUEST_TEXTS || '512', 10);
 const MAX_TEXT_LENGTH = parseInt(process.env.MAX_TEXT_LENGTH || '4000', 10);
+const positiveInt = (value, fallback) => {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+const INTRA_OP_THREADS = positiveInt(process.env.INTRA_OP_THREADS, 4);
+const INTER_OP_THREADS = positiveInt(process.env.INTER_OP_THREADS, 4);
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -44,7 +50,7 @@ let rerankerTokenizer = null;
 // Node.js is single-threaded, so this is purely logical ordering —
 // there is no actual preemption.  A NORMAL chunk that has already
 // started will finish before the next HIGH task runs.  Keeping
-// MAX_BATCH_SIZE at 32 means the worst-case wait for a HIGH task is
+// MAX_BATCH_SIZE limits the worst-case wait for a HIGH task to
 // one chunk (~500 ms), not an entire 50-text reindex batch.
 
 const queues = { high: [], normal: [] };
@@ -85,8 +91,8 @@ async function loadModel() {
     embedder = await pipeline('feature-extraction', MODEL, {
         cache_dir: './models',
         session_options: {
-            intraOpNumThreads: 4,
-            interOpNumThreads: 4,
+            intraOpNumThreads: INTRA_OP_THREADS,
+            interOpNumThreads: INTER_OP_THREADS,
         }
     });
     // Auto-detect actual vector dimension
@@ -109,8 +115,8 @@ async function loadReranker() {
     rerankerModel = await AutoModelForSequenceClassification.from_pretrained(RERANKER_MODEL, {
         cache_dir: './models',
         session_options: {
-            intraOpNumThreads: 4,
-            interOpNumThreads: 4,
+            intraOpNumThreads: INTRA_OP_THREADS,
+            interOpNumThreads: INTER_OP_THREADS,
         }
     });
     rerankerTokenizer = await AutoTokenizer.from_pretrained(RERANKER_MODEL, {
@@ -262,18 +268,27 @@ app.get('/health', (_req, res) => {
         workerBusy: running,
         rerankerEnabled: ENABLE_RERANKER,
         rerankerReady: !!(rerankerModel && rerankerTokenizer),
+        threads: { intraOp: INTRA_OP_THREADS, interOp: INTER_OP_THREADS },
     });
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
-Promise.all([loadModel(), loadReranker()])
+loadModel()
     .then(() => {
         app.listen(PORT, HOST, () => {
             console.log(
                 `[embedding-service] Listening on http://${HOST}:${PORT}` +
-                `  model=${MODEL}  reranker=${RERANKER_MODEL}  batchSize=${MAX_BATCH_SIZE}`
+                `  model=${MODEL}  reranker=${RERANKER_MODEL}  batchSize=${MAX_BATCH_SIZE}` +
+                `  threads=${INTRA_OP_THREADS}/${INTER_OP_THREADS}`
             );
+        });
+
+        // Embeddings are the critical path for indexing and search. Make the
+        // service available as soon as that model is ready; reranking can load
+        // afterwards and gracefully returns 503 until it is ready.
+        loadReranker().catch((err) => {
+            console.error('[embedding-service] Failed to load reranker:', err);
         });
     })
     .catch((err) => {

@@ -7,11 +7,13 @@ Type=simple
 User=www-data
 WorkingDirectory=/var/www/html/app/code/Kkkonrad/VectorSearch/embedding-service
 ExecStart=/usr/bin/node server.js
-Restart=on-failure
+Restart=always
 RestartSec=5
 Environment=PORT=3000
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
+Environment=INTRA_OP_THREADS=4
+Environment=INTER_OP_THREADS=4
 EnvironmentFile=-/etc/default/magento-vector-search
 # Allow enough RAM for the ONNX model (~500MB)
 MemoryMax=1G

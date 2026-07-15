@@ -256,6 +256,38 @@ Pełny reindex najpierw sprawdza embedding-service, buduje osobny indeks, a dopi
 zapisaniu wszystkich dokumentów atomowo przełącza alias. Nie usuwaj ręcznie indeksów `_v_*` ani
 aliasu `_current`; moduł zachowuje dwie ostatnie wersje do szybkiego rollbacku.
 
+## Wydajnosc Indeksowania
+
+Pelny reindex ponownie wykorzystuje embeddingi z aktywnego indeksu, gdy nie zmienily sie tekst
+produktu ani model embeddingowy. Pierwszy reindex oraz produkty ze zmieniona trescia nadal wymagaja
+obliczenia nowych wektorow. W logu `var/log/system.log` kazda partia zawiera czas etapow:
+przygotowania tekstu, sprawdzenia hashy, embeddingu i zapisu bulk do OpenSearch.
+
+Embedding-service powinien dzialac stale. Jego zimny start obejmuje zaladowanie modelu i moze trwac
+kilkadziesiat sekund, ale po zmianie glowny endpoint `/embed` zaczyna odpowiadac bez oczekiwania na
+zaladowanie opcjonalnego rerankera.
+
+Parametry wydajnosci mozna ustawic w `/etc/default/magento-vector-search`:
+
+```bash
+INTRA_OP_THREADS=4
+INTER_OP_THREADS=4
+MAX_BATCH_SIZE=64
+```
+
+Po zmianie uruchom ponownie usluge i porownaj czasy na rzeczywistych danych:
+
+```bash
+sudo systemctl restart magento-vector-search.service
+curl http://127.0.0.1:3000/health
+php bin/magento indexer:reindex vector_search_products
+grep '\[VectorSearch\].*Full reindex complete' var/log/system.log | tail -1
+```
+
+Wieksza liczba watkow nie zawsze oznacza szybsze przetwarzanie z powodu narzutu i konkurencji o CPU.
+Domyslne `4/4` jest bezpiecznym punktem startowym; zmieniaj jedna wartosc naraz i zachowuj wynik,
+ktory poprawia czas bez pogorszenia opoznien wyszukiwania.
+
 ## Minimalny Zestaw Kontrolny
 
 ```bash
