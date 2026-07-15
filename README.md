@@ -60,6 +60,12 @@ Plik unit zaklada, ze Magento znajduje sie w `/var/www/html`, a PHP/serwer WWW d
 `User`, `WorkingDirectory` i `ReadWritePaths` w pliku
 `vendor/kkkonrad/magento2-vector-search/embedding-service/embedding-service.service`.
 
+Unit automatycznie wykrywa lokalizacje modulu. Najpierw sprawdza instalacje Composer w
+`vendor/kkkonrad/magento2-vector-search`, a nastepnie wariant developerski w
+`app/code/Kkkonrad/VectorSearch`. W obu przypadkach `server.js`, `node_modules` i katalog `models`
+sa odczytywane z wykrytego katalogu modulu. Gdy Magento nie znajduje sie w `/var/www/html`, zmien
+`WorkingDirectory` oraz obie opcjonalne sciezki `ReadWritePaths` w kopiowanym pliku unit.
+
 ```bash
 sudo cp vendor/kkkonrad/magento2-vector-search/embedding-service/embedding-service.service \
     /etc/systemd/system/magento-vector-search.service

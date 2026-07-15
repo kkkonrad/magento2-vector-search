@@ -5,8 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=/var/www/html/vendor/kkkonrad/magento2-vector-search/embedding-service
-ExecStart=/usr/bin/node server.js
+WorkingDirectory=/var/www/html
+# Prefer the Composer package, then fall back to an app/code installation.
+ExecStart=/bin/sh -ec 'if [ -f vendor/kkkonrad/magento2-vector-search/embedding-service/server.js ]; then cd vendor/kkkonrad/magento2-vector-search/embedding-service; exec /usr/bin/node server.js; elif [ -f app/code/Kkkonrad/VectorSearch/embedding-service/server.js ]; then cd app/code/Kkkonrad/VectorSearch/embedding-service; exec /usr/bin/node server.js; else echo "VectorSearch embedding-service not found in vendor or app/code" >&2; exit 1; fi'
 Restart=always
 RestartSec=5
 Environment=PORT=3000
@@ -21,7 +22,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/var/www/html/vendor/kkkonrad/magento2-vector-search/embedding-service/models
+# A leading '-' makes the path optional when only one installation method is present.
+ReadWritePaths=-/var/www/html/vendor/kkkonrad/magento2-vector-search/embedding-service/models
+ReadWritePaths=-/var/www/html/app/code/Kkkonrad/VectorSearch/embedding-service/models
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=embedding-service
