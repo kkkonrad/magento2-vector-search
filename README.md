@@ -256,6 +256,33 @@ Pełny reindex najpierw sprawdza embedding-service, buduje osobny indeks, a dopi
 zapisaniu wszystkich dokumentów atomowo przełącza alias. Nie usuwaj ręcznie indeksów `_v_*` ani
 aliasu `_current`; moduł zachowuje dwie ostatnie wersje do szybkiego rollbacku.
 
+## Zgodnosc Z Hyva
+
+Modul obsluguje rownolegle motywy Luma i Hyva:
+
+- Luma korzysta z istniejacego komponentu RequireJS/jQuery i pliku `rich-suggest.css`;
+- Hyva automatycznie podmienia inicjalizacje przez uchwyt `hyva_default.xml`, nie laduje zasobow
+  Lumy i korzysta z natywnego JavaScriptu oraz klas Tailwind;
+- endpoint, cache i logika wyszukiwania sa wspolne dla obu motywow.
+
+Po instalacji modulu w sklepie z Hyva wygeneruj konfiguracje modulow i przebuduj CSS aktywnego
+motywu (sciezke do katalogu `web/tailwind` dostosuj do instalacji):
+
+```bash
+php bin/magento hyva:config:generate
+(
+    cd app/design/frontend/Vendor/hyva-theme/web/tailwind
+    npm install
+    npm run build-prod
+)
+php bin/magento cache:clean layout block_html full_page
+```
+
+Modul dostarcza `view/frontend/tailwind/module.css` dla aktualnego mechanizmu laczenia zasobow
+oraz konfiguracje zgodnosci dla motywow korzystajacych z Tailwind v3. Nie wymaga osobnego modulu
+kompatybilnosci. Po wdrozeniu sprawdz podpowiedzi myszka i klawiatura na osobnych store view dla
+Lumy i Hyva.
+
 ## Wydajnosc Indeksowania
 
 Pelny reindex ponownie wykorzystuje embeddingi z aktywnego indeksu, gdy nie zmienily sie tekst

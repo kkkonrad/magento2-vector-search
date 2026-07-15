@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <head>
+        <remove src="Kkkonrad_VectorSearch::css/rich-suggest.css"/>
+    </head>
+    <body>
+        <referenceBlock name="kkkonrad.vectorsearch.rich.suggest" remove="true"/>
+        <referenceContainer name="before.body.end">
+            <block class="Magento\Framework\View\Element\Template"
+                   name="kkkonrad.vectorsearch.hyva.suggest"
+                   template="Kkkonrad_VectorSearch::hyva/rich-suggest.phtml"/>
+        </referenceContainer>
+    </body>
+</page>

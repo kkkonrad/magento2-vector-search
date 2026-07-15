@@ -1,0 +1,317 @@
+<?php
+/** @var \Magento\Framework\View\Element\Template $block */
+/** @var \Magento\Framework\Escaper $escaper */
+
+$config = [
+    'endpoint' => $block->getUrl('vectorsearch/ajax/suggest'),
+    'minLength' => 3,
+    'delay' => 300,
+    'cacheLifetime' => 300000,
+    'labels' => [
+        'bestMatches' => (string)__('Best matches'),
+        'showAll' => (string)__('Show all'),
+        'suggestedPhrases' => (string)__('Suggested phrases'),
+        'categories' => (string)__('Categories'),
+        'products' => (string)__('Products'),
+        'category' => (string)__('Category'),
+        'searching' => (string)__('Searching...'),
+    ],
+];
+?>
+<script>
+(function () {
+    'use strict';
+
+    const config = <?= /* @noEscape */ json_encode(
+        $config,
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+    ) ?>;
+
+    function initKkkonradVectorSearchHyvaSuggest() {
+        const input = document.querySelector('#search') ||
+            document.querySelector('header input[name="q"]');
+
+        if (!input || input.dataset.vectorsearchHyvaSuggest === 'true') {
+            return Boolean(input);
+        }
+
+        const form = input.closest('form');
+        const control = input.parentElement;
+        if (!form || !control) {
+            return false;
+        }
+
+        input.dataset.vectorsearchHyvaSuggest = 'true';
+        control.classList.add('relative');
+
+        const panel = document.createElement('div');
+        panel.id = 'vectorsearch-hyva-suggest';
+        panel.className = 'absolute left-0 right-0 top-full z-50 mt-2 max-h-[70vh] overflow-auto rounded-lg border border-gray-200 bg-white text-gray-900 shadow-xl';
+        panel.setAttribute('role', 'listbox');
+        panel.setAttribute('aria-label', '<?= $escaper->escapeJs((string)__('Search suggestions')) ?>');
+        panel.hidden = true;
+        control.appendChild(panel);
+
+        const hideNativeAutocomplete = () => {
+            control.querySelectorAll('#search_autocomplete, [role="listbox"]').forEach((candidate) => {
+                if (candidate !== panel && !panel.contains(candidate)) {
+                    candidate.hidden = true;
+                    candidate.setAttribute('aria-hidden', 'true');
+                }
+            });
+        };
+        hideNativeAutocomplete();
+        new MutationObserver(hideNativeAutocomplete).observe(control, {
+            childList: true,
+            subtree: true
+        });
+
+        input.setAttribute('aria-controls', panel.id);
+        input.setAttribute('aria-haspopup', 'listbox');
+
+        let request = null;
+        let debounceTimer = null;
+        let activeIndex = -1;
+        const cache = new Map();
+
+        const escapeHtml = (value) => {
+            const element = document.createElement('div');
+            element.textContent = value == null ? '' : String(value);
+            return element.innerHTML;
+        };
+
+        const hasResults = (data) =>
+            (data.phrases && data.phrases.length) ||
+            (data.categories && data.categories.length) ||
+            (data.products && data.products.length);
+
+        const itemMarkup = (item, type) => {
+            const subtitle = type === 'category'
+                ? (item.path || config.labels.category)
+                : '';
+            const icon = type === 'category'
+                ? '<svg class="h-5 w-5" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>'
+                : '<svg class="h-5 w-5" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor"><circle cx="10.5" cy="10.5" r="5.5" stroke-width="2"/><path stroke-linecap="round" stroke-width="2" d="m15 15 5 5"/></svg>';
+
+            return '<a href="' + escapeHtml(item.url) + '" role="option" aria-selected="false" data-vectorsearch-item ' +
+                'class="flex min-h-11 items-center gap-3 px-3 py-2 text-sm text-gray-900 no-underline hover:bg-gray-100 hover:text-gray-900 focus:bg-gray-100 focus:text-gray-900 focus:outline-none">' +
+                '<span class="flex h-8 w-8 shrink-0 items-center justify-center bg-gray-100 text-primary">' + icon + '</span>' +
+                '<span class="min-w-0"><span class="block truncate font-medium">' + escapeHtml(item.title) + '</span>' +
+                (subtitle ? '<span class="block truncate text-xs text-gray-500">' + escapeHtml(subtitle) + '</span>' : '') +
+                '</span></a>';
+        };
+
+        const productMarkup = (item) =>
+            '<a href="' + escapeHtml(item.url) + '" role="option" aria-selected="false" data-vectorsearch-item ' +
+            'class="flex h-full flex-col items-center p-3 text-center text-gray-900 no-underline hover:bg-gray-100 hover:text-gray-900 focus:bg-gray-100 focus:text-gray-900 focus:outline-none">' +
+            '<span class="mb-2 block aspect-square w-full max-w-28 overflow-hidden bg-gray-50">' +
+            '<img src="' + escapeHtml(item.image) + '" alt="" loading="lazy" class="h-full w-full object-contain"/></span>' +
+            '<span class="line-clamp-2 text-sm font-semibold leading-5">' + escapeHtml(item.title) + '</span>' +
+            '<span class="mt-1 text-xs text-gray-500">' + escapeHtml(item.sku) + '</span>' +
+            '<span class="mt-2 text-sm font-bold">' + escapeHtml(item.price) + '</span></a>';
+
+        const sectionMarkup = (title, body, extraClasses) => {
+            if (!body) {
+                return '';
+            }
+            return '<section class="min-w-0 p-3 ' + (extraClasses || '') + '">' +
+                '<h3 class="mb-1 text-xs font-semibold text-gray-500">' + escapeHtml(title) + '</h3>' +
+                body + '</section>';
+        };
+
+        const render = (data) => {
+            if (!hasResults(data)) {
+                hide();
+                return;
+            }
+
+            const phrases = (data.phrases || []).map((item) => itemMarkup(item, 'phrase')).join('');
+            const categories = (data.categories || []).map((item) => itemMarkup(item, 'category')).join('');
+            const products = (data.products || []).map(productMarkup).join('');
+            const top = sectionMarkup(config.labels.suggestedPhrases, phrases) +
+                sectionMarkup(config.labels.categories, categories, 'border-t border-gray-200 md:border-l md:border-t-0');
+
+            panel.innerHTML =
+                '<div class="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2">' +
+                '<strong class="text-xs font-semibold text-gray-700">' + escapeHtml(config.labels.bestMatches) + '</strong>' +
+                '<a class="text-xs font-semibold text-primary hover:underline" href="' + escapeHtml(data.search_url) + '">' +
+                escapeHtml(config.labels.showAll) + '</a></div>' +
+                (top ? '<div class="grid grid-cols-1 md:grid-cols-2">' + top + '</div>' : '') +
+                sectionMarkup(
+                    config.labels.products,
+                    products ? '<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">' + products + '</div>' : '',
+                    'border-t border-gray-200'
+                );
+
+            activeIndex = -1;
+            panel.hidden = false;
+            input.setAttribute('aria-expanded', 'true');
+            input.removeAttribute('aria-activedescendant');
+        };
+
+        const hide = () => {
+            activeIndex = -1;
+            panel.hidden = true;
+            panel.innerHTML = '';
+            input.setAttribute('aria-expanded', 'false');
+            input.removeAttribute('aria-activedescendant');
+        };
+
+        const items = () => Array.from(panel.querySelectorAll('[data-vectorsearch-item]'));
+
+        const setActive = (index) => {
+            const list = items();
+            if (!list.length) {
+                return;
+            }
+
+            activeIndex = index < 0 ? list.length - 1 : index >= list.length ? 0 : index;
+            list.forEach((item, itemIndex) => {
+                const active = itemIndex === activeIndex;
+                item.classList.toggle('bg-gray-100', active);
+                item.setAttribute('aria-selected', active ? 'true' : 'false');
+                item.removeAttribute('id');
+            });
+
+            const active = list[activeIndex];
+            active.id = 'vectorsearch-hyva-option-' + activeIndex;
+            input.setAttribute('aria-activedescendant', active.id);
+            active.scrollIntoView({block: 'nearest'});
+        };
+
+        const fetchSuggestions = async () => {
+            const query = input.value.trim();
+            const cacheKey = query.toLocaleLowerCase();
+
+            if (query.length < config.minLength) {
+                if (request) {
+                    request.abort();
+                }
+                hide();
+                return;
+            }
+
+            const cached = cache.get(cacheKey);
+            if (cached && cached.expires > Date.now()) {
+                render(cached.data);
+                return;
+            }
+
+            if (request) {
+                request.abort();
+            }
+            request = new AbortController();
+            const currentRequest = request;
+
+            panel.innerHTML = '<div class="p-4 text-sm text-gray-500" role="status">' +
+                escapeHtml(config.labels.searching) + '</div>';
+            panel.hidden = false;
+
+            try {
+                const url = new URL(config.endpoint, window.location.origin);
+                url.searchParams.set('q', query);
+                const response = await fetch(url.toString(), {
+                    headers: {'Accept': 'application/json'},
+                    signal: currentRequest.signal,
+                    credentials: 'same-origin'
+                });
+                if (!response.ok) {
+                    throw new Error('Suggestion request failed with HTTP ' + response.status);
+                }
+
+                const data = await response.json();
+                if (input.value.trim() !== query) {
+                    return;
+                }
+
+                cache.set(cacheKey, {
+                    data: data,
+                    expires: Date.now() + config.cacheLifetime
+                });
+                render(data);
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    hide();
+                }
+            } finally {
+                if (request === currentRequest) {
+                    request = null;
+                }
+            }
+        };
+
+        input.addEventListener('input', () => {
+            window.queueMicrotask(hideNativeAutocomplete);
+            window.clearTimeout(debounceTimer);
+            hide();
+            debounceTimer = window.setTimeout(fetchSuggestions, config.delay);
+        });
+
+        input.addEventListener('focus', () => {
+            const cached = cache.get(input.value.trim().toLocaleLowerCase());
+            if (cached && cached.expires > Date.now()) {
+                render(cached.data);
+            }
+        });
+
+        input.addEventListener('keydown', (event) => {
+            if (panel.hidden) {
+                return;
+            }
+
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setActive(activeIndex + 1);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setActive(activeIndex - 1);
+            } else if (event.key === 'Enter' && activeIndex >= 0) {
+                event.preventDefault();
+                const active = items()[activeIndex];
+                if (active) {
+                    window.location.href = active.href;
+                }
+            } else if (event.key === 'Escape') {
+                hide();
+            }
+        });
+
+        panel.addEventListener('mouseover', (event) => {
+            const item = event.target.closest('[data-vectorsearch-item]');
+            if (item) {
+                setActive(items().indexOf(item));
+            }
+        });
+
+        document.addEventListener('mousedown', (event) => {
+            if (event.target !== input && !panel.contains(event.target)) {
+                hide();
+            }
+        });
+
+        form.addEventListener('submit', () => {
+            window.clearTimeout(debounceTimer);
+            if (request) {
+                request.abort();
+            }
+        });
+
+        return true;
+    }
+
+    const start = () => {
+        if (!initKkkonradVectorSearchHyvaSuggest()) {
+            window.setTimeout(initKkkonradVectorSearchHyvaSuggest, 500);
+        }
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, {once: true});
+    } else {
+        start();
+    }
+})();
+</script>
+<?php if (isset($hyvaCsp) && method_exists($hyvaCsp, 'registerInlineScript')): ?>
+    <?php $hyvaCsp->registerInlineScript() ?>
+<?php endif; ?>
